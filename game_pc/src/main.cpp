@@ -84,6 +84,7 @@ static constexpr int kMinPacketPayloadBytes = 512;
 static constexpr int kMaxPacketPayloadBytes = 60000;
 static constexpr uint32_t UDP_PACKET_V3_MAGIC = 0x33415047u;  // "GPA3" little-endian (v3: +captureUnixMicros)
 static constexpr uint8_t UDP_PIXEL_FORMAT_RGB = 2;
+static constexpr uint8_t UDP_PIXEL_FORMAT_BGRA = 3;
 
 // Game-PC wall clock (system_clock) epoch microseconds, stamped at capture and
 // carried in the packet header so the inference PC can measure capture->inference
@@ -107,8 +108,8 @@ struct OutputInfo {
 struct LatestFrameSlot {
     std::mutex mutex;
     std::condition_variable cv;
-    // Capture keeps only the newest DDA BGRA frame. The sender converts that
-    // latest frame to RGB with SIMD, so old frames cannot queue behind inference.
+    // Capture keeps only the newest DDA BGRA frame which is sent directly over
+    // UDP (no BGRA->RGB conversion). Old frames cannot queue behind inference.
     std::vector<uint8_t> bgra;
     uint64_t sequence = 0;
     uint64_t captureUnixMicros = 0;  // wall-clock at grab, for E2E latency
@@ -487,8 +488,8 @@ public:
             return false;
         }
 
-        // Create staging texture if needed
-        if (!m_staging || m_stagingWidth != w || m_stagingHeight != h) {
+        // Create/recreate staging ring (2 textures) if needed
+        if (!m_staging[0] || m_stagingWidth != w || m_stagingHeight != h) {
             D3D11_TEXTURE2D_DESC stagingDesc = {};
             stagingDesc.Width = w;
             stagingDesc.Height = h;
@@ -499,25 +500,30 @@ public:
             stagingDesc.Usage = D3D11_USAGE_STAGING;
             stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
-            m_device->CreateTexture2D(&stagingDesc, nullptr, &m_staging);
+            m_device->CreateTexture2D(&stagingDesc, nullptr, &m_staging[0]);
+            m_device->CreateTexture2D(&stagingDesc, nullptr, &m_staging[1]);
             m_stagingWidth = w;
             m_stagingHeight = h;
+            m_stagingIndex = 0;
+            m_stagingReady = false;
         }
 
-        // Copy region
+        // Copy region into the CURRENT staging texture
         D3D11_BOX box = {(UINT)x, (UINT)y, 0, (UINT)(x + w), (UINT)(y + h), 1};
-        m_context->CopySubresourceRegion(m_staging.Get(), 0, 0, 0, 0, texture.Get(), 0, &box);
+        m_context->CopySubresourceRegion(m_staging[m_stagingIndex].Get(), 0, 0, 0, 0, texture.Get(), 0, &box);
 
-        // Map and copy data
+        // Map the PREVIOUS staging texture (its GPU copy finished last frame).
+        // On the first frame, no previous exists, so fall back to mapping current.
+        const int mapIndex = m_stagingReady ? (1 - m_stagingIndex) : m_stagingIndex;
         D3D11_MAPPED_SUBRESOURCE mapped;
-        hr = m_context->Map(m_staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        hr = m_context->Map(m_staging[mapIndex].Get(), 0, D3D11_MAP_READ, 0, &mapped);
         if (FAILED(hr)) {
             m_duplication->ReleaseFrame();
             setResult(CaptureStatus::Failed, hr);
             return false;
         }
 
-        // Copy BGRA readback; the sender converts it to RGB before UDP transmission.
+        // Copy BGRA readback directly (no BGRA->RGB conversion; sent as BGRA).
         const size_t frameBytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
         if (outData.size() != frameBytes) {
             outData.resize(frameBytes);
@@ -534,7 +540,10 @@ public:
             }
         }
 
-        m_context->Unmap(m_staging.Get(), 0);
+        m_context->Unmap(m_staging[mapIndex].Get(), 0);
+        // Flip staging index for next frame
+        m_stagingIndex = 1 - m_stagingIndex;
+        m_stagingReady = true;
         m_duplication->ReleaseFrame();
         if (outReadbackUs) {
             *outReadbackUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -552,7 +561,9 @@ private:
     ComPtr<ID3D11DeviceContext> m_context;
     ComPtr<IDXGIOutput> m_output;
     ComPtr<IDXGIOutputDuplication> m_duplication;
-    ComPtr<ID3D11Texture2D> m_staging;
+    ComPtr<ID3D11Texture2D> m_staging[2];  // ring buffer for pipelined GPU readback
+    int m_stagingIndex = 0;               // current write target (0 or 1)
+    bool m_stagingReady = false;          // true after first frame (previous staging valid)
     int m_screenWidth = 0;
     int m_screenHeight = 0;
     int m_stagingWidth = 0;
@@ -1266,8 +1277,8 @@ int main(int argc, char** argv) {
         std::cout << "Capture mode: absolute top-left (CaptureX/Y)\n";
     }
 
-    constexpr uint8_t wireBytesPerPixelValue = 3;
-    constexpr uint8_t wirePixelFormatValue = UDP_PIXEL_FORMAT_RGB;
+    constexpr uint8_t wireBytesPerPixelValue = 4;  // BGRA = 4 bytes/pixel
+    constexpr uint8_t wirePixelFormatValue = UDP_PIXEL_FORMAT_BGRA;
     const int effectivePayloadBytes = clampPacketPayloadBytes(g_config.packetPayloadBytes);
     warnIfPayloadExceedsMtu(effectivePayloadBytes);
     const size_t maxPayloadPerPacket = static_cast<size_t>(effectivePayloadBytes);
@@ -1327,7 +1338,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::cout << "GamePC Streamer (RGB, " << maxPayloadPerPacket
+    std::cout << "GamePC Streamer (BGRA, " << maxPayloadPerPacket
               << "B payload, UDP V3) started\n";
     std::cout << "Sending to: " << g_config.inferenceIP << ":" << g_config.sendPort << "\n";
     std::cout << "Local bind IP: " << boundIpText << "\n";
@@ -1346,9 +1357,9 @@ int main(int argc, char** argv) {
     StreamStats stats;
     std::atomic<int> frameCredits{1};  // Bootstrap one frame so inference can learn our UDP source.
     std::atomic<uint32_t> minCreditFrameId{0};
-    // RGB-only, scatter/gather UDP send, and SIMD conversion cut bandwidth/copy
-    // cost. Local 256x256 tests favored 60000B payload for average/p95 latency,
-    // but real LAN loss/MTU behavior should still be checked with payload sweep.
+    // BGRA-direct, scatter/gather UDP send cut bandwidth/copy cost. Local 256x256
+    // tests favored 60000B payload for average/p95 latency, but real LAN loss/MTU
+    // behavior should still be checked with payload sweep.
     const auto creditRecoveryTimeout =
         std::chrono::milliseconds(std::clamp(g_config.creditTimeoutMs, 5, 1000));
     auto statsStart = std::chrono::steady_clock::now();
@@ -1375,7 +1386,6 @@ int main(int argc, char** argv) {
     std::thread senderThread([&]() {
         applyWindowsRealtimeHint(L"udp-send", 0);
         std::vector<uint8_t> bgraLocal;
-        std::vector<uint8_t> wireData;
         uint32_t frameId = 0;
         uint64_t lastSentSequence = 0;
         auto lastSendAttempt = std::chrono::steady_clock::now() - creditRecoveryTimeout;
@@ -1430,15 +1440,10 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            const auto convertStart = std::chrono::high_resolution_clock::now();
-            convertBgraToRgb(bgraLocal, wireData, sendWidth, sendHeight);
-            const auto convertEnd = std::chrono::high_resolution_clock::now();
-            stats.totalConvertUs.fetch_add(
-                std::chrono::duration_cast<std::chrono::microseconds>(convertEnd - convertStart).count(),
-                std::memory_order_relaxed);
-
-            const uint8_t* sendData = wireData.data();
-            const size_t frameSize = wireData.size();
+            // BGRA sent directly -- no conversion needed.
+            // totalConvertUs stays 0 (kept for stats compatibility).
+            const uint8_t* sendData = bgraLocal.data();
+            const size_t frameSize = bgraLocal.size();
             if (!sendData || frameSize == 0 || frameSize > UINT32_MAX) {
                 continue;
             }
@@ -1552,7 +1557,7 @@ int main(int argc, char** argv) {
              << " Cvt:" << avgConvert << "ms"
              << " Snd:" << avgSend << "ms"
              << " | " << mbps << " Mbps"
-             << " | RGB/" << maxPayloadPerPacket << "B"
+             << " | BGRA/" << maxPayloadPerPacket << "B"
              << " | " << std::setprecision(1) << packetsPerFrame << " pkts/frame"
              << " | Drop:" << std::setprecision(1) << dropPct << "%"
              << " (WB:" << wouldBlockDrops << ")"
