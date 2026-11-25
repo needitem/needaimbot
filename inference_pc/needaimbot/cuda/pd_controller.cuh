@@ -115,6 +115,152 @@ __device__ __forceinline__ float leadGate(const AimConfig& cfg, const AimState* 
     return g;
 }
 
+// 4-state constant-velocity Kalman filter for target velocity estimation.
+// Tracks the raw center [x,y] and its velocity [vx,vy] with a predict-update
+// cycle each frame. All matrix math is hand-unrolled for the fixed 4x4/2x2
+// dimensions (no dynamic allocation, no loops that nvcc cannot unroll).
+//
+// Process model (dt = 1 frame):
+//   F = [1 0 1 0; 0 1 0 1; 0 0 1 0; 0 0 0 1]
+// Measurement model:
+//   H = [1 0 0 0; 0 1 0 0]
+// Process noise Q (constant-velocity, acceleration as noise, variance q):
+//   Q = q * [1/4 0 1/2 0; 0 1/4 0 1/2; 1/2 0 1 0; 0 1/2 0 1]
+// Measurement noise R:
+//   R = r * I_2
+//
+// On fresh_track the filter is seeded at the measurement with zero velocity.
+// On class_changed (skip_meas) only the predict step runs and the position
+// is snapped to the measurement (the new anchor), preserving velocity state
+// so the anchor-flip artifact does not corrupt the velocity estimate.
+__device__ __forceinline__ void kalmanVelocityUpdate(
+    float meas_x, float meas_y,
+    const AimConfig& cfg,
+    AimState* s,
+    bool fresh, bool skip_meas)
+{
+    float* x = s->kf_x;
+    float* P = s->kf_P;
+    const float q = fmaxf(cfg.kalman_process_noise, 1e-6f);
+    const float r = fmaxf(cfg.kalman_measure_noise, 1e-6f);
+
+    // --- Seed on fresh track or first use ---
+    if (fresh || s->kf_initialized == 0) {
+        x[0] = meas_x;
+        x[1] = meas_y;
+        x[2] = 0.0f;
+        x[3] = 0.0f;
+        // Initial covariance: position = measurement noise, velocity = large
+        // (we know where the target is but not how fast it moves).
+        #pragma unroll
+        for (int i = 0; i < 16; ++i) P[i] = 0.0f;
+        P[0]  = r;       // var(px)
+        P[5]  = r;       // var(py)
+        P[10] = 100.0f;  // var(vx) - ~10 px/frame std
+        P[15] = 100.0f;  // var(vy)
+        s->kf_initialized = 1;
+        return;
+    }
+
+    // --- Predict: x_pred = F*x, P_pred = F*P*F^T + Q ---
+    x[0] += x[2];  // px += vx
+    x[1] += x[3];  // py += vy
+
+    // Save the current P for the product (modified in place below).
+    float p[16];
+    #pragma unroll
+    for (int i = 0; i < 16; ++i) p[i] = P[i];
+
+    // F*P*F^T + Q, hand-unrolled. Exploits symmetry of P (p[i*4+j] == p[j*4+i]).
+    // Only the 10 unique entries are computed; the symmetric copies are assigned.
+    P[0]  = p[0] + p[2] + p[8] + p[10] + q * 0.25f;  // var(px)
+    P[1]  = p[1] + p[3] + p[9] + p[11];                // cov(px,py)
+    P[2]  = p[2] + p[10] + q * 0.5f;                    // cov(px,vx)
+    P[3]  = p[3] + p[11];                                // cov(px,vy)
+    P[4]  = P[1];
+    P[5]  = p[5] + p[7] + p[13] + p[15] + q * 0.25f;  // var(py)
+    P[6]  = p[6] + p[14];                                // cov(py,vx)
+    P[7]  = p[7] + p[15] + q * 0.5f;                    // cov(py,vy)
+    P[8]  = P[2];
+    P[9]  = P[6];
+    P[10] = p[10] + q;                                    // var(vx)
+    P[11] = p[11];                                        // cov(vx,vy)
+    P[12] = P[3];
+    P[13] = P[7];
+    P[14] = P[11];
+    P[15] = p[15] + q;                                    // var(vy)
+
+    if (skip_meas) {
+        // Class-change anchor flip: snap position to new anchor (prevents
+        // next frame's innovation from including the anchor offset), preserve
+        // velocity estimate. Reset position covariance; zero cross terms.
+        x[0] = meas_x;
+        x[1] = meas_y;
+        P[0] = r;    P[1] = 0.0f; P[2] = 0.0f; P[3] = 0.0f;
+        P[4] = 0.0f; P[5] = r;    P[6] = 0.0f; P[7] = 0.0f;
+        P[8] = 0.0f; P[9] = 0.0f; // P[10], P[11] preserved (velocity cov)
+        P[12]= 0.0f; P[13]= 0.0f; // P[14], P[15] preserved (velocity cov)
+        return;
+    }
+
+    // --- Update: Kalman gain K, state correction, covariance update ---
+
+    // Innovation y = z - H*x_pred
+    const float y0 = meas_x - x[0];
+    const float y1 = meas_y - x[1];
+
+    // Innovation covariance S = H*P*H^T + R (2x2, symmetric)
+    const float S00 = P[0] + r;
+    const float S01 = P[1];
+    const float S11 = P[5] + r;
+
+    // 2x2 inverse via determinant
+    float det = S00 * S11 - S01 * S01;
+    if (fabsf(det) < 1e-12f) return;  // degenerate: skip update
+    const float inv_det = 1.0f / det;
+
+    // Kalman gain K (4x2) = P * H^T * S^-1
+    // K[i][j] = (P[i*4+0]*S^-1[0][j] + P[i*4+1]*S^-1[1][j])
+    float K[8];
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const float Pi0 = P[i * 4 + 0];
+        const float Pi1 = P[i * 4 + 1];
+        K[i * 2 + 0] = ( Pi0 * S11 - Pi1 * S01) * inv_det;
+        K[i * 2 + 1] = (-Pi0 * S01 + Pi1 * S00) * inv_det;
+    }
+
+    // State update: x = x + K*y
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        x[i] += K[i * 2 + 0] * y0 + K[i * 2 + 1] * y1;
+    }
+
+    // Covariance update: P = (I - K*H)*P
+    // P_new[i][j] = P[i][j] - K[i][0]*P[0][j] - K[i][1]*P[1][j]
+    // Save rows 0-1 of P first (they are modified in the loop).
+    const float P0[4] = {P[0], P[1], P[2], P[3]};
+    const float P1[4] = {P[4], P[5], P[6], P[7]};
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            P[i * 4 + j] -= K[i * 2 + 0] * P0[j] + K[i * 2 + 1] * P1[j];
+        }
+    }
+
+    // Symmetrize to prevent numerical drift.
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        #pragma unroll
+        for (int j = i + 1; j < 4; ++j) {
+            const float avg = 0.5f * (P[i * 4 + j] + P[j * 4 + i]);
+            P[i * 4 + j] = avg;
+            P[j * 4 + i] = avg;
+        }
+    }
+}
+
 __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
     // Clear carry if it opposes the new direction: stale residual from a
     // previous frame must not fight a freshly reversed target motion.
@@ -241,21 +387,46 @@ __device__ __forceinline__ void computeAimMovement(
         (aim_config.ff_gain > 0.0f || aim_config.predict_frames > 0.0f);
     if (lead_active) {
         if (aim_state->has_track) {
-            float ax = 0.0f, ay = 0.0f;
-            inflightAt(aim_state, aim_config.ff_ego_lag, ax, ay);
-            const float maxDrift = 60.0f;   // model px/frame sanity clamp
-            float dvx = (raw_center_x - aim_state->prev_raw_x)
-                      + ((movement_scale_x != 0.0f) ? ax / movement_scale_x : 0.0f);
-            float dvy = (raw_center_y - aim_state->prev_raw_y)
-                      + ((movement_scale_y != 0.0f) ? ay / movement_scale_y : 0.0f);
-            dvx = fminf(fmaxf(dvx, -maxDrift), maxDrift);
-            dvy = fminf(fmaxf(dvy, -maxDrift), maxDrift);
-            const float a = fminf(fmaxf(aim_config.ff_v_ema, 0.0f), 1.0f);
-            aim_state->vel_x = (1.0f - a) * aim_state->vel_x + a * dvx;
-            aim_state->vel_y = (1.0f - a) * aim_state->vel_y + a * dvy;
+            if (aim_config.kalman_enabled != 0.0f) {
+                // Kalman velocity path: predict+update on raw center, then
+                // ego-correct the filtered velocity to recover the target's
+                // true screen velocity. The Kalman filter tracks raw_center,
+                // so its velocity is d(raw)/dt = target_vel - cursor_vel.
+                // Adding the cursor velocity from the in-flight ring recovers
+                // the target's true velocity.
+                kalmanVelocityUpdate(raw_center_x, raw_center_y,
+                                     aim_config, aim_state,
+                                     /*fresh=*/false, /*skip_meas=*/class_changed);
+                float ax = 0.0f, ay = 0.0f;
+                inflightAt(aim_state, aim_config.ff_ego_lag, ax, ay);
+                aim_state->vel_x = aim_state->kf_x[2]
+                    + ((movement_scale_x != 0.0f) ? ax / movement_scale_x : 0.0f);
+                aim_state->vel_y = aim_state->kf_x[3]
+                    + ((movement_scale_y != 0.0f) ? ay / movement_scale_y : 0.0f);
+            } else {
+                // Legacy EMA velocity path.
+                float ax = 0.0f, ay = 0.0f;
+                inflightAt(aim_state, aim_config.ff_ego_lag, ax, ay);
+                const float maxDrift = 60.0f;   // model px/frame sanity clamp
+                float dvx = (raw_center_x - aim_state->prev_raw_x)
+                          + ((movement_scale_x != 0.0f) ? ax / movement_scale_x : 0.0f);
+                float dvy = (raw_center_y - aim_state->prev_raw_y)
+                          + ((movement_scale_y != 0.0f) ? ay / movement_scale_y : 0.0f);
+                dvx = fminf(fmaxf(dvx, -maxDrift), maxDrift);
+                dvy = fminf(fmaxf(dvy, -maxDrift), maxDrift);
+                const float a = fminf(fmaxf(aim_config.ff_v_ema, 0.0f), 1.0f);
+                aim_state->vel_x = (1.0f - a) * aim_state->vel_x + a * dvx;
+                aim_state->vel_y = (1.0f - a) * aim_state->vel_y + a * dvy;
+            }
         } else {
             aim_state->vel_x = 0.0f;
             aim_state->vel_y = 0.0f;
+            if (aim_config.kalman_enabled != 0.0f) {
+                // Seed the Kalman filter on fresh acquire.
+                kalmanVelocityUpdate(raw_center_x, raw_center_y,
+                                     aim_config, aim_state,
+                                     /*fresh=*/true, /*skip_meas=*/false);
+            }
         }
         aim_state->prev_raw_x = raw_center_x;
         aim_state->prev_raw_y = raw_center_y;

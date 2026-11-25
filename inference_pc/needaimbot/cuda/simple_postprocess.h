@@ -78,6 +78,17 @@ struct AimState {
     float inflight_x[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
     float inflight_y[kInflightMax] = {0.0f, 0.0f, 0.0f, 0.0f};
     int   inflight_head = 0;   // next write slot
+
+    // --- Kalman velocity filter state (constant-velocity model) ---
+    // 4-state [px, py, vx, vy] tracking the raw center position. When
+    // kalman_enabled != 0, the filtered vx/vy replaces the EMA velocity
+    // used by the lead terms (see kalmanVelocityUpdate in pd_controller.cuh).
+    float kf_x[4]  = {0.0f, 0.0f, 0.0f, 0.0f};
+    float kf_P[16] = {0.0f, 0.0f, 0.0f, 0.0f,
+                       0.0f, 0.0f, 0.0f, 0.0f,
+                       0.0f, 0.0f, 0.0f, 0.0f,
+                       0.0f, 0.0f, 0.0f, 0.0f};
+    int   kf_initialized = 0;
 };
 
 // Nonlinear P controller configuration.
@@ -197,6 +208,21 @@ struct AimConfig {
     //   -1.5%, hold -1.2%, tracking -0.4..-1.4%, step overshoot/osc/reach UNCHANGED
     //   - nothing regresses. 0 = off.
     float class_switch_reject = 1.0f;
+
+    // --- Kalman velocity estimator (alternative to EMA for lead terms) ---
+    // kalman_enabled != 0 replaces the EMA velocity smoothing with a 4-state
+    // constant-velocity Kalman filter ([x,y,vx,vy]). Produces cleaner velocity
+    // estimates at rest (less jitter) and tracks acceleration transitions better,
+    // allowing the lead terms (ff_gain, predict_frames) to be driven harder.
+    // 0 = off (legacy EMA, controlled by ff_v_ema). The same ego-correction
+    // from the in-flight ring applies in both modes.
+    float kalman_enabled = 0.0f;
+    // Process noise (acceleration uncertainty, px/frame^2): higher = trusts
+    // measurements more, tracks acceleration changes faster, noisier at rest.
+    float kalman_process_noise = 0.5f;
+    // Measurement noise (detector position jitter, px^2): higher = trusts
+    // the constant-velocity model more, smoother but slower to respond.
+    float kalman_measure_noise = 2.0f;
 
     // --- Body-priority target selection ---
     // head and body are two DIFFERENT anchors on the same enemy. Letting the

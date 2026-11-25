@@ -62,6 +62,12 @@ public:
     // Symmetric dead-time comp: extrapolate the TARGET forward over the dead time
     // (inflight_comp only removed OUR motion). 0 = off.
     float predict_frames = 5.47f;
+    // Kalman velocity estimator (alternative to EMA). 0 = off (EMA via ff_v_ema),
+    // nonzero = use a 4-state constant-velocity Kalman filter for the velocity
+    // that feeds the lead terms. See simple_postprocess.h for the full description.
+    float kalman_enabled = 0.0f;
+    float kalman_process_noise = 0.5f;
+    float kalman_measure_noise = 2.0f;
     // Reject the head<->body anchor-flip artifact (the selected classId already
     // identifies those frames exactly). 1 = on. See simple_postprocess.h.
     float class_switch_reject = 1.0f;
@@ -138,6 +144,18 @@ public:
             const float v = j["predict_frames"];
             predict_frames = std::clamp(v, 0.0f, 6.0f);
         }
+        if (j.contains("kalman_enabled")) {
+            const bool v = j["kalman_enabled"];
+            kalman_enabled = v ? 1.0f : 0.0f;
+        }
+        if (j.contains("kalman_process_noise")) {
+            const float v = j["kalman_process_noise"];
+            kalman_process_noise = std::clamp(v, 0.01f, 100.0f);
+        }
+        if (j.contains("kalman_measure_noise")) {
+            const float v = j["kalman_measure_noise"];
+            kalman_measure_noise = std::clamp(v, 0.01f, 100.0f);
+        }
         if (j.contains("head_deprioritized")) {
             const bool v = j["head_deprioritized"];
             head_deprioritized = v ? 1.0f : 0.0f;
@@ -190,6 +208,9 @@ public:
         j["lead_vgate"] = lead_vgate;
         j["lead_err_gate"] = lead_err_gate;
         j["predict_frames"] = predict_frames;
+        j["kalman_enabled"] = (kalman_enabled != 0.0f);
+        j["kalman_process_noise"] = kalman_process_noise;
+        j["kalman_measure_noise"] = kalman_measure_noise;
         j["class_switch_reject"] = (class_switch_reject != 0.0f);
         j["head_deprioritized"] = (head_deprioritized != 0.0f);
         j["aim_h_ema"] = aim_h_ema;
@@ -229,6 +250,12 @@ public:
                   << (predict_frames > 0.0f
                           ? "ON (" + std::to_string(predict_frames) + " frames)"
                           : std::string("OFF"))
+                  << std::endl;
+        std::cout << "[Config] Kalman velocity filter: "
+                  << (kalman_enabled != 0.0f
+                          ? "ON (q=" + std::to_string(kalman_process_noise) +
+                                ", r=" + std::to_string(kalman_measure_noise) + ")"
+                          : std::string("OFF (using EMA)"))
                   << std::endl;
         std::cout << "[Config] Body-priority selection: "
                   << (head_deprioritized != 0.0f ? "ON (head = fallback only)" : "OFF")
@@ -271,6 +298,9 @@ private:
         aim.lead_vgate = lead_vgate;
         aim.lead_err_gate = lead_err_gate;
         aim.predict_frames = predict_frames;
+        aim.kalman_enabled = kalman_enabled;
+        aim.kalman_process_noise = kalman_process_noise;
+        aim.kalman_measure_noise = kalman_measure_noise;
         aim.class_switch_reject = class_switch_reject;
         aim.head_deprioritized = head_deprioritized;
         aim.aim_h_ema = aim_h_ema;
