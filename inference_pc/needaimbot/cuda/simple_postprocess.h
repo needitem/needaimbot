@@ -242,10 +242,10 @@ struct AimConfig {
     float shoot_offset_x = 0.0f;
     float shoot_offset_y = 0.0f;
 
-    float sem_enabled = 0.0f;
-    float cga_enabled = 0.0f;
-    float jcad_enabled = 0.0f;
-    float pags_enabled = 0.0f;
+    float sem_enabled = 1.0f;
+    float cga_enabled = 1.0f;
+    float jcad_enabled = 1.0f;
+    float pags_enabled = 1.0f;
 };
 
 struct MouseMovement {

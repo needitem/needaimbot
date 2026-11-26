@@ -1,0 +1,228 @@
+{
+  "best_params": {
+    "kp_x": 0.924835,
+    "kp_y": 0.500173,
+    "p_softness_x": 5.534445,
+    "p_softness_y": 10.389904,
+    "kd_x": 0.097279,
+    "kd_y": 0.079092,
+    "ff_gain": 2.262388,
+    "predict_frames": 3.162187,
+    "deadtime_frames": 3.16364,
+    "oneeuro_min_cutoff": 0.053671,
+    "oneeuro_beta": 0.013581,
+    "max_step": 15.710863,
+    "sem_enabled": 1.0,
+    "cga_enabled": 1.0,
+    "jcad_enabled": 1.0,
+    "pags_enabled": 1.0,
+    "akp_large_thresh": 23.685267,
+    "akp_small_thresh": 2.522947,
+    "akp_large_mult": 1.053267,
+    "akp_small_mult": 0.683073
+  },
+  "best_avg_mae": 5.8165,
+  "baseline_avg_mae": 6.6199,
+  "total_improvement_pct": -12.14,
+  "per_trajectory_mae": {
+    "stationary": {
+      "baseline": 0.4402,
+      "optimal": 0.3509,
+      "improvement_pct": -20.27
+    },
+    "slow_strafe": {
+      "baseline": 7.1047,
+      "optimal": 5.8052,
+      "improvement_pct": -18.29
+    },
+    "fast_strafe": {
+      "baseline": 14.8504,
+      "optimal": 14.1605,
+      "improvement_pct": -4.65
+    },
+    "sine_wave": {
+      "baseline": 2.1582,
+      "optimal": 2.1089,
+      "improvement_pct": -2.28
+    },
+    "diagonal": {
+      "baseline": 13.6789,
+      "optimal": 11.0207,
+      "improvement_pct": -19.43
+    },
+    "step_response": {
+      "baseline": 1.4872,
+      "optimal": 1.4528,
+      "improvement_pct": -2.32
+    }
+  },
+  "total_candidates": 1000,
+  "valid_candidates": 5,
+  "top_10": [
+    {
+      "avg_mae": 5.8165,
+      "params": {
+        "kp_x": 0.924835,
+        "kp_y": 0.500173,
+        "p_softness_x": 5.534445,
+        "p_softness_y": 10.389904,
+        "kd_x": 0.097279,
+        "kd_y": 0.079092,
+        "ff_gain": 2.262388,
+        "predict_frames": 3.162187,
+        "deadtime_frames": 3.16364,
+        "oneeuro_min_cutoff": 0.053671,
+        "oneeuro_beta": 0.013581,
+        "max_step": 15.710863,
+        "sem_enabled": 1.0,
+        "cga_enabled": 1.0,
+        "jcad_enabled": 1.0,
+        "pags_enabled": 1.0,
+        "akp_large_thresh": 23.685267,
+        "akp_small_thresh": 2.522947,
+        "akp_large_mult": 1.053267,
+        "akp_small_mult": 0.683073
+      },
+      "per_traj": {
+        "stationary": 0.3509,
+        "slow_strafe": 5.8052,
+        "fast_strafe": 14.1605,
+        "sine_wave": 2.1089,
+        "diagonal": 11.0207,
+        "step_response": 1.4528
+      }
+    },
+    {
+      "avg_mae": 5.9086,
+      "params": {
+        "kp_x": 1.060242,
+        "kp_y": 0.583966,
+        "p_softness_x": 9.392616,
+        "p_softness_y": 10.270181,
+        "kd_x": 0.048021,
+        "kd_y": 0.037998,
+        "ff_gain": 1.488569,
+        "predict_frames": 3.860037,
+        "deadtime_frames": 3.19405,
+        "oneeuro_min_cutoff": 0.049497,
+        "oneeuro_beta": 0.025532,
+        "max_step": 23.886462,
+        "sem_enabled": 1.0,
+        "cga_enabled": 1.0,
+        "jcad_enabled": 1.0,
+        "pags_enabled": 0.0,
+        "akp_large_thresh": 24.108556,
+        "akp_small_thresh": 6.934977,
+        "akp_large_mult": 1.206248,
+        "akp_small_mult": 0.708576
+      },
+      "per_traj": {
+        "stationary": 0.4358,
+        "slow_strafe": 6.1619,
+        "fast_strafe": 13.5533,
+        "sine_wave": 2.1369,
+        "diagonal": 11.7673,
+        "step_response": 1.3963
+      }
+    },
+    {
+      "avg_mae": 6.0049,
+      "params": {
+        "kp_x": 0.798301,
+        "kp_y": 0.642896,
+        "p_softness_x": 5.89791,
+        "p_softness_y": 16.374514,
+        "kd_x": 0.092904,
+        "kd_y": 0.097814,
+        "ff_gain": 2.096235,
+        "predict_frames": 3.497522,
+        "deadtime_frames": 3.38171,
+        "oneeuro_min_cutoff": 0.089152,
+        "oneeuro_beta": 0.03656,
+        "max_step": 23.773611,
+        "sem_enabled": 1.0,
+        "cga_enabled": 0.0,
+        "jcad_enabled": 1.0,
+        "pags_enabled": 1.0,
+        "akp_large_thresh": 21.729312,
+        "akp_small_thresh": 4.658429,
+        "akp_large_mult": 1.435521,
+        "akp_small_mult": 0.909875
+      },
+      "per_traj": {
+        "stationary": 0.4399,
+        "slow_strafe": 6.3224,
+        "fast_strafe": 14.7326,
+        "sine_wave": 1.9725,
+        "diagonal": 11.1515,
+        "step_response": 1.4103
+      }
+    },
+    {
+      "avg_mae": 6.0148,
+      "params": {
+        "kp_x": 0.802736,
+        "kp_y": 0.67222,
+        "p_softness_x": 5.332227,
+        "p_softness_y": 11.465088,
+        "kd_x": 0.069025,
+        "kd_y": 0.08976,
+        "ff_gain": 1.904007,
+        "predict_frames": 4.41275,
+        "deadtime_frames": 3.328528,
+        "oneeuro_min_cutoff": 0.064969,
+        "oneeuro_beta": 0.025665,
+        "max_step": 22.825053,
+        "sem_enabled": 1.0,
+        "cga_enabled": 1.0,
+        "jcad_enabled": 1.0,
+        "pags_enabled": 1.0,
+        "akp_large_thresh": 22.12925,
+        "akp_small_thresh": 2.351256,
+        "akp_large_mult": 1.17823,
+        "akp_small_mult": 0.721901
+      },
+      "per_traj": {
+        "stationary": 0.3716,
+        "slow_strafe": 6.3548,
+        "fast_strafe": 14.5467,
+        "sine_wave": 2.1407,
+        "diagonal": 11.2644,
+        "step_response": 1.4109
+      }
+    },
+    {
+      "avg_mae": 6.3417,
+      "params": {
+        "kp_x": 1.066255,
+        "kp_y": 0.712177,
+        "p_softness_x": 5.811012,
+        "p_softness_y": 9.074027,
+        "kd_x": 0.035054,
+        "kd_y": 0.062615,
+        "ff_gain": 1.352,
+        "predict_frames": 4.313284,
+        "deadtime_frames": 3.189737,
+        "oneeuro_min_cutoff": 0.091664,
+        "oneeuro_beta": 0.020488,
+        "max_step": 16.074851,
+        "sem_enabled": 0.0,
+        "cga_enabled": 1.0,
+        "jcad_enabled": 1.0,
+        "pags_enabled": 0.0,
+        "akp_large_thresh": 18.260326,
+        "akp_small_thresh": 4.657098,
+        "akp_large_mult": 1.450035,
+        "akp_small_mult": 0.709717
+      },
+      "per_traj": {
+        "stationary": 0.4318,
+        "slow_strafe": 6.856,
+        "fast_strafe": 13.8747,
+        "sine_wave": 2.0576,
+        "diagonal": 13.472,
+        "step_response": 1.3581
+      }
+    }
+  ]
+}

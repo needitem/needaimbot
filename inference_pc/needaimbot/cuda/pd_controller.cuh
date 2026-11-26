@@ -37,10 +37,10 @@ __device__ constexpr float kPagsAcquireMult  = 1.1f;
 __device__ constexpr float kPagsOscMult      = 0.4f;
 __device__ constexpr float kPagsAlpha        = 0.2f;
 // Adaptive kp: error-magnitude-dependent gain scaling
-__device__ constexpr float kAdaptiveKpLargeThreshold = 15.0f;
-__device__ constexpr float kAdaptiveKpSmallThreshold = 4.0f;
-__device__ constexpr float kAdaptiveKpLargeMult = 1.3f;
-__device__ constexpr float kAdaptiveKpSmallMult = 0.7f;
+__device__ constexpr float kAdaptiveKpLargeThreshold = 23.69f;
+__device__ constexpr float kAdaptiveKpSmallThreshold = 2.52f;
+__device__ constexpr float kAdaptiveKpLargeMult = 1.05f;
+__device__ constexpr float kAdaptiveKpSmallMult = 0.68f;
 
 // alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
 __device__ __forceinline__ float oneEuroAlpha(float cutoff) {

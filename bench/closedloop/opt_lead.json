@@ -1,0 +1,121 @@
+{
+  "best_params": {
+    "ff_gain": 2.991332,
+    "predict_frames": 2.796604,
+    "deadtime_frames": 2.339343,
+    "oneeuro_beta": 0.021407,
+    "oneeuro_min_cutoff": 0.148828
+  },
+  "best_score": 6.0121,
+  "top_10": [
+    {
+      "params": {
+        "ff_gain": 2.991332,
+        "predict_frames": 2.796604,
+        "deadtime_frames": 2.339343,
+        "oneeuro_beta": 0.021407,
+        "oneeuro_min_cutoff": 0.148828
+      },
+      "score": 6.0121
+    },
+    {
+      "params": {
+        "ff_gain": 2.768087,
+        "predict_frames": 1.910811,
+        "deadtime_frames": 2.179374,
+        "oneeuro_beta": 0.025689,
+        "oneeuro_min_cutoff": 0.119009
+      },
+      "score": 6.1343
+    },
+    {
+      "params": {
+        "ff_gain": 2.916217,
+        "predict_frames": 1.974472,
+        "deadtime_frames": 1.882965,
+        "oneeuro_beta": 0.026683,
+        "oneeuro_min_cutoff": 0.076828
+      },
+      "score": 6.2211
+    },
+    {
+      "params": {
+        "ff_gain": 2.703685,
+        "predict_frames": 2.970083,
+        "deadtime_frames": 2.256067,
+        "oneeuro_beta": 0.024786,
+        "oneeuro_min_cutoff": 0.084148
+      },
+      "score": 6.2432
+    },
+    {
+      "params": {
+        "ff_gain": 2.618182,
+        "predict_frames": 2.717391,
+        "deadtime_frames": 1.851293,
+        "oneeuro_beta": 0.049842,
+        "oneeuro_min_cutoff": 0.060592
+      },
+      "score": 6.2567
+    },
+    {
+      "params": {
+        "ff_gain": 2.707459,
+        "predict_frames": 4.850416,
+        "deadtime_frames": 2.513443,
+        "oneeuro_beta": 0.047079,
+        "oneeuro_min_cutoff": 0.138563
+      },
+      "score": 6.2775
+    },
+    {
+      "params": {
+        "ff_gain": 2.758467,
+        "predict_frames": 2.091164,
+        "deadtime_frames": 2.307067,
+        "oneeuro_beta": 0.019626,
+        "oneeuro_min_cutoff": 0.100634
+      },
+      "score": 6.2821
+    },
+    {
+      "params": {
+        "ff_gain": 2.51458,
+        "predict_frames": 2.502334,
+        "deadtime_frames": 2.023869,
+        "oneeuro_beta": 0.019937,
+        "oneeuro_min_cutoff": 0.115519
+      },
+      "score": 6.2976
+    },
+    {
+      "params": {
+        "ff_gain": 2.95157,
+        "predict_frames": 2.187449,
+        "deadtime_frames": 2.581016,
+        "oneeuro_beta": 0.034273,
+        "oneeuro_min_cutoff": 0.087613
+      },
+      "score": 6.3037
+    },
+    {
+      "params": {
+        "ff_gain": 2.400054,
+        "predict_frames": 4.548045,
+        "deadtime_frames": 2.75168,
+        "oneeuro_beta": 0.041827,
+        "oneeuro_min_cutoff": 0.125353
+      },
+      "score": 6.3339
+    }
+  ],
+  "search_stats": {
+    "total_samples": 200,
+    "search_space": "lead_prediction",
+    "seeds": [
+      42,
+      137,
+      256
+    ]
+  }
+}
