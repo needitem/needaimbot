@@ -1,10 +1,9 @@
 #pragma once
 
 // Movement/control layer: turns an aim decision (dx, dy) into physical mouse
-// motion. Owns the async move-sender thread, the lock-free move queue, and
-// no-recoil ticking - decoupled from the capture/inference orchestration in
-// simple_main.cpp, which only ever calls submitAimMovement() (from the GPU
-// completion callback) and tickNoRecoil() (from its main loop).
+// motion. Owns the async move-sender thread and the lock-free move queue -
+// decoupled from the capture/inference orchestration in simple_main.cpp, which
+// only ever calls submitAimMovement() (from the GPU completion callback).
 
 #include <algorithm>
 #include <array>
@@ -123,10 +122,6 @@ struct Settings {
     bool directAimMoveInCallback = false;
     int mouseMinIntervalMs = 1;
 
-    bool noRecoilEnabled = true;
-    float recoilCompX = 0.0f;
-    float recoilCompY = 0.8f;
-    int recoilTickMs = 10;
     // NOTE: the static shoot-offset aim-shift no longer lives here. It is a
     // reference-point shift applied inside the GPU controller (AimConfig::
     // shoot_offset_x/y), fed per-frame from Config::shootOffsetX/Y while
@@ -148,7 +143,6 @@ public:
     void configure(MakcuConnection& makcu, const Settings& settings) {
         makcu_ = &makcu;
         settings_ = settings;
-        lastRecoilTime_ = Clock::now();
     }
 
     // onThreadStart runs once on the sender thread before it starts draining
@@ -201,32 +195,6 @@ public:
         }
     }
 
-    // Called every ~1ms from the main loop with the current button mask;
-    // fires a no-recoil tick every recoilTickMs while shooting + aiming.
-    void tickNoRecoil(uint8_t buttonMask) {
-        if (!settings_.noRecoilEnabled) return;
-
-        const bool firing = maskShooting(buttonMask) &&
-                             (settings_.forceAimOn || maskAiming(buttonMask));
-        if (!firing) {
-            // Drop any stale sub-pixel carry whenever a firing burst is not
-            // active, so it can't survive into the next burst.
-            recoilResidualX_ = 0.0f;
-            recoilResidualY_ = 0.0f;
-            return;
-        }
-
-        const auto now = Clock::now();
-        const auto tick = std::chrono::milliseconds(settings_.recoilTickMs);
-        if (now - lastRecoilTime_ < tick) return;
-
-        emitRecoilTick();
-        lastRecoilTime_ += tick;
-        if (lastRecoilTime_ < now - tick) {
-            lastRecoilTime_ = now;  // fell far behind -> resync, no burst
-        }
-    }
-
     uint64_t takeDroppedCount() {
         return moveQueueDropped_.exchange(0, std::memory_order_relaxed);
     }
@@ -244,31 +212,6 @@ private:
             std::lock_guard<std::mutex> lock(moveQueueCvMutex_);
         }
         moveQueueCv_.notify_one();
-    }
-
-    // Best-effort queued move (falls back to an immediate send if the queue is
-    // momentarily full) - used for no-recoil, which must never be silently
-    // dropped the way an occasional aim-move sample can be.
-    void queueMove(int dx, int dy) {
-        if (dx == 0 && dy == 0) return;
-        const MoveCommand cmd{dx, dy};
-        if (moveQueue_.tryPush(cmd)) {
-            notifySender();
-        } else {
-            makcu_->move(dx, dy);
-        }
-    }
-
-    // Carries the sub-pixel remainder so a fractional comp value (e.g. 1.3)
-    // averages out instead of truncating to int every tick.
-    void emitRecoilTick() {
-        recoilResidualX_ += settings_.recoilCompX;
-        recoilResidualY_ += settings_.recoilCompY;
-        const int dx = static_cast<int>(recoilResidualX_);
-        const int dy = static_cast<int>(recoilResidualY_);
-        recoilResidualX_ -= static_cast<float>(dx);
-        recoilResidualY_ -= static_cast<float>(dy);
-        queueMove(dx, dy);
     }
 
     void senderLoop() {
@@ -340,10 +283,6 @@ private:
 
     std::atomic<bool> senderRunning_{false};
     std::thread senderThread_;
-
-    Clock::time_point lastRecoilTime_{};
-    float recoilResidualX_ = 0.0f;
-    float recoilResidualY_ = 0.0f;
 };
 
 }  // namespace controller

@@ -95,12 +95,6 @@ struct Config {
     // see needaimbot/mouse/pd_controller.hpp.
     pd_controller::Settings pd;
 
-    // No-recoil
-    bool noRecoilEnabled = true;
-    float recoilCompX = 0.0f;
-    float recoilCompY = 0.8f;
-    int recoilTickMs = 10;
-
     // Static shoot-offset aim-shift (applied while aiming + shooting).
     float shootOffsetX = 0.0f;
     float shootOffsetY = -13.0f;
@@ -236,11 +230,6 @@ struct Config {
             if (j.contains("body_aim_point")) bodyAimPoint = j["body_aim_point"];
 
             pd.load(j);
-
-            if (j.contains("no_recoil_enabled")) noRecoilEnabled = j["no_recoil_enabled"];
-            if (j.contains("recoil_comp_x")) recoilCompX = j["recoil_comp_x"];
-            if (j.contains("recoil_comp_y")) recoilCompY = j["recoil_comp_y"];
-            if (j.contains("recoil_tick_ms")) recoilTickMs = j["recoil_tick_ms"];
 
             if (j.contains("shoot_offset_x")) shootOffsetX = j["shoot_offset_x"];
             if (j.contains("shoot_offset_y")) shootOffsetY = j["shoot_offset_y"];
@@ -386,12 +375,6 @@ struct Config {
             section("AIM CONTROLLER + CENTER FILTER");
             pd.save(j);  // PD gains, thumb gains, stickiness, One Euro
 
-            section("RECOIL COMPENSATION");
-            j["no_recoil_enabled"] = noRecoilEnabled;
-            j["recoil_comp_x"] = recoilCompX;
-            j["recoil_comp_y"] = recoilCompY;
-            j["recoil_tick_ms"] = recoilTickMs;
-
             section("PIPELINE / LATENCY");
             j["max_inflight_frames"] = maxInFlightFrames;
             j["frame_credit_depth"] = frameCreditDepth;
@@ -452,8 +435,6 @@ struct Config {
         std::cout << "[Config] Confidence: " << confThreshold << std::endl;
         pd.print();
         std::cout << "[Config] Max detections: " << maxDetections << std::endl;
-        std::cout << "[Config] No-recoil: " << (noRecoilEnabled ? "ON" : "OFF")
-                  << " (Y=" << recoilCompY << ", tick=" << recoilTickMs << "ms)" << std::endl;
         std::cout << "[Config] Shoot offset: (" << shootOffsetX << ", " << shootOffsetY << ")"
                   << ((shootOffsetX != 0.0f || shootOffsetY != 0.0f) ? "" : " (off)") << std::endl;
         std::cout << "[Config] Max in-flight frames: " << maxInFlightFrames << std::endl;

@@ -1,6 +1,6 @@
 // Simple aimbot - clean implementation
 // UDP capture + TensorRT inference + Mouse control via Makcu
-// Features: Full GPU pipeline (inference + postprocess + nonlinear P), No-recoil
+// Features: Full GPU pipeline (inference + postprocess + nonlinear P)
 // GPU Callback API for lowest latency (no cudaStreamSync wait)
 // Minimal CPU usage - frame receive on CPU, inference/postprocess/movement on GPU
 
@@ -364,18 +364,14 @@ int main(int argc, char* argv[]) {
     };
     const uint32_t allowedClassMask = cfg.getAllowedClassMask();
 
-    // Movement controller: owns the move queue, sender thread, and no-recoil
-    // ticking. main only ever hands it inference results / button state.
+    // Movement controller: owns the move queue and sender thread.
+    // main only ever hands it inference results.
     controller::MouseController movementController;
     controller::Settings controllerSettings;
     controllerSettings.forceAimOn = cfg.forceAimOn;
     controllerSettings.directAimMoveInCallback =
         cfg.directAimMoveInCallback && cfg.mouseMinIntervalMs <= 0;
     controllerSettings.mouseMinIntervalMs = cfg.mouseMinIntervalMs;
-    controllerSettings.noRecoilEnabled = cfg.noRecoilEnabled;
-    controllerSettings.recoilCompX = cfg.recoilCompX;
-    controllerSettings.recoilCompY = cfg.recoilCompY;
-    controllerSettings.recoilTickMs = cfg.recoilTickMs;
     // shoot-offset is applied as a GPU-side aim-reference shift (fed per-frame
     // via frameAimConfig), not through the controller - see the callback above.
     movementController.configure(makcu, controllerSettings);
@@ -500,7 +496,6 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\n[Simple] Running... Press Ctrl+C to exit" << std::endl;
     std::cout << "[Simple] Right-click (or Side2) = AIM" << std::endl;
-    std::cout << "[Simple] Left+Right = AIM + NO-RECOIL" << std::endl;
 
     // 6. Main loop with GPU callback API
     // - Frame submission is event-driven: UDPCapture's receive thread invokes
@@ -1084,12 +1079,6 @@ int main(int argc, char* argv[]) {
         }
 
         const auto now = std::chrono::steady_clock::now();
-
-        // No-recoil compensation: purely time-based (fires every recoilTickMs
-        // while left+right click is held), driven by this loop's own 1ms
-        // cadence rather than by frame arrival, since frame submission is now
-        // event-driven and may not touch the main loop at all while aiming.
-        movementController.tickNoRecoil(makcu.buttonMask());
 
         // Idle-only housekeeping: graph pre-capture and debug frame dump each
         // pull their own frame directly (the hot path only runs while aiming),

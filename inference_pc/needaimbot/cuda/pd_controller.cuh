@@ -21,10 +21,6 @@ __device__ constexpr float kFfEgoLag        = 2.85f;
 __device__ constexpr float kSemRate         = 0.01f;
 __device__ constexpr float kSemMax          = 3.0f;
 __device__ constexpr float kSemDecay        = 0.97f;
-// CGA internals
-__device__ constexpr float kCgaConfLow      = 0.4f;
-__device__ constexpr float kCgaConfHigh     = 0.8f;
-__device__ constexpr float kCgaSpeedThreshold = 3.0f;
 // JCAD internals
 __device__ constexpr float kJcadAlpha       = 0.15f;
 __device__ constexpr float kJcadBaseDb      = 0.5f;
@@ -216,13 +212,6 @@ __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
     }
     *residual = value - static_cast<float>(emit);
     return emit;
-}
-
-// CUDA smoothstep: 0 at edge0, 1 at edge1, smooth hermite interpolation between.
-// Used by CGA for the confidence gate curve.
-__device__ __forceinline__ float gpaSmoothstep(float edge0, float edge1, float x) {
-    const float t = fminf(fmaxf((x - edge0) / (edge1 - edge0 + 1e-7f), 0.0f), 1.0f);
-    return t * t * (3.0f - 2.0f * t);
 }
 
 // Full PD controller for a target detected THIS frame: One Euro pre-filter on
@@ -614,23 +603,6 @@ __device__ __forceinline__ void computeAimMovement(
     // controller reacting correctly. Measured closed-loop on an X-only target,
     // horizontal error moves 0.05% across y_scale 1.0 -> 0.
     clampMaxStep(movement_x, movement_y, aim_config.max_step);
-
-    // --- CGA: Confidence-Gated Authority. Modulates the whole output by
-    // detection confidence, with a speed bypass so MOVING targets get full
-    // authority regardless of confidence (motion blur drops conf to ~0.4-0.5,
-    // overlapping the ~0.38 outlier level - see the removed conf-weight note
-    // above). At rest (speed near 0), low confidence suppresses the output
-    // through a smoothstep gate; at speed the bypass saturates to ~1.
-    if (aim_config.cga_enabled != 0.0f) {
-        const float speed = sqrtf(aim_state->vel_x * aim_state->vel_x +
-                                  aim_state->vel_y * aim_state->vel_y);
-        const float speed_bypass = speed / (speed + kCgaSpeedThreshold + 1e-7f);
-        const float conf_gate = gpaSmoothstep(kCgaConfLow, kCgaConfHigh,
-                                              detection_confidence);
-        const float gate = fmaxf(conf_gate, speed_bypass);
-        movement_x *= gate;
-        movement_y *= gate;
-    }
 
     // Output gate. The ring must record what the mouse ACTUALLY receives, so when
     // the host has told us this frame's move will not be sent (aim key up while
