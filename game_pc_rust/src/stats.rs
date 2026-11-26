@@ -154,36 +154,30 @@ pub fn print_stats_line(
     let last_hr = stats.last_capture_hr.load(Ordering::Relaxed);
 
     let mut line = format!(
-        "\rPollFPS: {:.1} | NewCapFPS: {:.1} | SkipFPS: {:.1} | CT:{} AL:{} CF:{} | OutFPS: {:.1} | SendFPS: {:.1} | Cap:{:.2}ms (Acq:{:.2} Rdbk:{:.2}) Cvt:{:.2}ms Snd:{:.2}ms | {:.2} Mbps | BGRA/{}B | {:.1} pkts/frame | Drop:{:.1}% (WB:{}) | Credit:{} Rec:{}",
-        poll_fps,
+        "\rCap:{:.0} Out:{:.0} Snd:{:.0} | {:.1}ms({:.1}+{:.1}+{:.1}) | {:.0}Mbps | Drop:{:.0}%({}) | Cr:{} Rc:{}",
         cap_fps,
-        skip_fps,
-        capture_timeouts,
-        capture_access_lost,
-        capture_failures,
         out_fps,
         send_fps,
-        avg_capture,
+        avg_capture + avg_convert + avg_send,
         avg_acquire,
         avg_readback,
-        avg_convert,
         avg_send,
         mbps,
-        max_payload,
-        packets_per_frame,
         drop_pct,
         would_block_drops,
         credit_packets,
         recovery_sends,
     );
 
+    if capture_timeouts > 0 || capture_access_lost > 0 || capture_failures > 0 {
+        line.push_str(&format!(" CT:{} AL:{} CF:{}", capture_timeouts, capture_access_lost, capture_failures));
+    }
     if last_hr != 0 {
         line.push_str(&format!(" HR:0x{:X}", last_hr));
     }
-    let term_width = 220;
-    let visible_len = line.len() - 1; // subtract \r
-    if visible_len < term_width {
-        line.extend(std::iter::repeat(' ').take(term_width - visible_len));
+    let visible_len = line.len() - 1;
+    if visible_len < 120 {
+        line.extend(std::iter::repeat(' ').take(120 - visible_len));
     }
 
     print!("{}", line);
