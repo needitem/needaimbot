@@ -180,7 +180,11 @@ pub fn print_stats_line(
     if last_hr != 0 {
         line.push_str(&format!(" HR:0x{:X}", last_hr));
     }
-    line.push_str("\x1b[K");
+    let term_width = 220;
+    let visible_len = line.len() - 1; // subtract \r
+    if visible_len < term_width {
+        line.extend(std::iter::repeat(' ').take(term_width - visible_len));
+    }
 
     print!("{}", line);
     use std::io::Write;
