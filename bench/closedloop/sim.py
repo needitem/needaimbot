@@ -82,37 +82,37 @@ class AimState:
 
 @dataclass
 class AimConfig:
-    kp_x: float = 0.925
-    kp_y: float = 0.500
-    p_softness_x: float = 5.53
-    p_softness_y: float = 10.39
-    kd_x: float = 0.097
-    kd_y: float = 0.079
+    kp_x: float = 0.991
+    kp_y: float = 0.389
+    p_softness_x: float = 7.39
+    p_softness_y: float = 20.0
+    kd_x: float = 0.035
+    kd_y: float = 0.025
     fine_track_boost: float = 1.3
     fine_track_range: float = 0.5
-    max_step: float = 15.71
-    deadtime_frames: float = 3.16
-    ff_gain: float = 2.26
+    max_step: float = 14.55
+    deadtime_frames: float = 3.90
+    ff_gain: float = 2.08
     ff_ego_lag: float = 2.85
-    predict_frames: float = 3.16
+    predict_frames: float = 4.30
     oneeuro_enabled: float = 1.0
-    oneeuro_min_cutoff: float = 0.054
-    oneeuro_beta: float = 0.014
+    oneeuro_min_cutoff: float = 0.030
+    oneeuro_beta: float = 0.050
     aim_output_enabled: float = 1.0
     shoot_offset_x: float = 0.0
     shoot_offset_y: float = 0.0
     aim_y_scale: float = 1.0
-    sem_enabled: float = 0.0
+    sem_enabled: float = 1.0
     cga_enabled: float = 0.0
-    jcad_enabled: float = 0.0
-    pags_enabled: float = 0.0
+    jcad_enabled: float = 1.0
+    pags_enabled: float = 1.0
 
 # ---------------------------------------------------------------------------
 # Hardcoded constants (mirrors pd_controller.cuh)
 # ---------------------------------------------------------------------------
-K_LEAD_VGATE = 14.79
+K_LEAD_VGATE = 5.82
 K_LEAD_ERR_GATE = 22.25
-K_FF_V_EMA = 0.235
+K_FF_V_EMA = 0.097
 K_FF_EGO_LAG = 2.85
 K_ACCEL_EMA = 0.15
 K_FINE_TRACK_BOOST = 1.3
@@ -133,10 +133,10 @@ K_PAGS_ACQUIRE_MULT = 1.1
 K_PAGS_OSC_MULT = 0.4
 K_PAGS_ALPHA = 0.2
 # Adaptive kp: error-magnitude-dependent gain scaling
-K_ADAPTIVE_KP_LARGE_THRESHOLD = 23.69
-K_ADAPTIVE_KP_SMALL_THRESHOLD = 2.52
-K_ADAPTIVE_KP_LARGE_MULT = 1.05
-K_ADAPTIVE_KP_SMALL_MULT = 0.68
+K_ADAPTIVE_KP_LARGE_THRESHOLD = 26.67
+K_ADAPTIVE_KP_SMALL_THRESHOLD = 1.79
+K_ADAPTIVE_KP_LARGE_MULT = 1.28
+K_ADAPTIVE_KP_SMALL_MULT = 0.97
 
 K_DERIV_ALPHA = (2.0 * math.pi) / (2.0 * math.pi + 1.0)
 
@@ -755,13 +755,8 @@ def config_baseline():
     return AimConfig()
 
 def config_production():
-    """Full production config: all 4 novel algorithms enabled."""
-    c = config_baseline()
-    c.sem_enabled = 1.0
-    c.cga_enabled = 1.0
-    c.jcad_enabled = 1.0
-    c.pags_enabled = 1.0
-    return c
+    """Full production config: SEM+JCAD+PAGS enabled, CGA disabled."""
+    return AimConfig()
 
 def config_sem_pags():
     """Baseline + SEM + PAGS only."""
