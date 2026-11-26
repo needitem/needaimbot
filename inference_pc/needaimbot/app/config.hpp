@@ -68,11 +68,6 @@ inline void rescaleAimConfigForRate(gpa::AimConfig& c, double r) {
     c.oneeuro_min_cutoff *= fr;
     c.predict_frames /= fr;
     c.ff_gain /= fr;
-    // Kalman process noise is acceleration variance per frame; physical
-    // acceleration is constant, so the per-frame variance scales linearly
-    // with the frame period (Q_vel = q_continuous * T).  Measurement noise
-    // is per-detection (px^2) and does not depend on the frame rate.
-    c.kalman_process_noise *= fr;
 }
 
 // Configuration

@@ -16,7 +16,6 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
-#include <immintrin.h>
 
 #include <atomic>
 #include <algorithm>
@@ -221,74 +220,6 @@ void warnIfPayloadExceedsMtu(int bytes) {
               << "; each chunk will be IP-fragmented and a single lost fragment "
                  "will drop the whole chunk. Use jumbo frames or lower it.\n";
 }
-
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSSE3__)
-void convertBgraToRgbSsse3(const uint8_t* src, uint8_t* dst, size_t pixelCount) {
-    const __m128i shuffleMask = _mm_setr_epi8(
-        2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12,
-        static_cast<char>(0x80), static_cast<char>(0x80),
-        static_cast<char>(0x80), static_cast<char>(0x80));
-
-    size_t i = 0;
-    for (; i + 16 <= pixelCount; i += 16) {
-        const __m128i p0 = _mm_shuffle_epi8(
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src)), shuffleMask);
-        const __m128i p1 = _mm_shuffle_epi8(
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 16)), shuffleMask);
-        const __m128i p2 = _mm_shuffle_epi8(
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 32)), shuffleMask);
-        const __m128i p3 = _mm_shuffle_epi8(
-            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + 48)), shuffleMask);
-
-        const __m128i out0 = _mm_or_si128(p0, _mm_slli_si128(p1, 12));
-        const __m128i out1 = _mm_or_si128(_mm_srli_si128(p1, 4), _mm_slli_si128(p2, 8));
-        const __m128i out2 = _mm_or_si128(_mm_srli_si128(p2, 8), _mm_slli_si128(p3, 4));
-
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst), out0);
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + 16), out1);
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + 32), out2);
-        src += 64;
-        dst += 48;
-    }
-
-    for (; i < pixelCount; ++i) {
-        dst[0] = src[2];
-        dst[1] = src[1];
-        dst[2] = src[0];
-        src += 4;
-        dst += 3;
-    }
-}
-#endif
-
-void convertBgraToRgb(const std::vector<uint8_t>& bgra, std::vector<uint8_t>& rgb,
-                      int width, int height) {
-    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
-    const size_t expectedBgraBytes = pixelCount * 4;
-    if (bgra.size() < expectedBgraBytes) {
-        rgb.clear();
-        return;
-    }
-    const size_t requiredBytes = pixelCount * 3;
-    if (rgb.size() != requiredBytes) {
-        rgb.resize(requiredBytes);
-    }
-
-    const uint8_t* src = bgra.data();
-    uint8_t* dst = rgb.data();
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSSE3__)
-    convertBgraToRgbSsse3(src, dst, pixelCount);
-#else
-    for (size_t i = 0; i < pixelCount; ++i) {
-        dst[0] = src[2];
-        dst[1] = src[1];
-        dst[2] = src[0];
-        src += 4;
-        dst += 3;
-    }
-#endif
-}
-
 std::string wideToUtf8(const wchar_t* wide) {
     if (!wide || wide[0] == L'\0') return "";
 
