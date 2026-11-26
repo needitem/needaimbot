@@ -154,15 +154,7 @@ pub fn print_stats_line(
     let last_hr = stats.last_capture_hr.load(Ordering::Relaxed);
 
     let mut line = format!(
-        "\rPollFPS: {:.1} | NewCapFPS: {:.1} | SkipFPS: {:.1} \
-         | CT:{} AL:{} CF:{} \
-         | OutFPS: {:.1} | SendFPS: {:.1} \
-         | Cap:{:.2}ms (Acq:{:.2} Rdbk:{:.2}) Cvt:{:.2}ms Snd:{:.2}ms \
-         | {:.2} Mbps \
-         | BGRA/{}B \
-         | {:.1} pkts/frame \
-         | Drop:{:.1}% (WB:{}) \
-         | Credit:{} Rec:{}",
+        "\rPollFPS: {:.1} | NewCapFPS: {:.1} | SkipFPS: {:.1} | CT:{} AL:{} CF:{} | OutFPS: {:.1} | SendFPS: {:.1} | Cap:{:.2}ms (Acq:{:.2} Rdbk:{:.2}) Cvt:{:.2}ms Snd:{:.2}ms | {:.2} Mbps | BGRA/{}B | {:.1} pkts/frame | Drop:{:.1}% (WB:{}) | Credit:{} Rec:{}",
         poll_fps,
         cap_fps,
         skip_fps,
@@ -188,8 +180,8 @@ pub fn print_stats_line(
     if last_hr != 0 {
         line.push_str(&format!(" HR:0x{:X}", last_hr));
     }
+    line.push_str("\x1b[K");
 
-    // Print with carriage return (overwrite line in-place).
     print!("{}", line);
     use std::io::Write;
     let _ = std::io::stdout().flush();

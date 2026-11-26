@@ -755,8 +755,8 @@ void UDPCapture::receiveThread() {
 
         if (totalChunks == 0 || chunkIndex >= totalChunks ||
             frameWidth == 0 || frameHeight == 0 ||
-            bytesPerPixel != 3 ||
-            pixelFormat != UDP_PIXEL_FORMAT_RGB) {
+            !((bytesPerPixel == 3 && pixelFormat == UDP_PIXEL_FORMAT_RGB) ||
+              (bytesPerPixel == 4 && pixelFormat == UDP_PIXEL_FORMAT_BGRA))) {
             return;
         }
         const size_t expectedFrameBytes =
