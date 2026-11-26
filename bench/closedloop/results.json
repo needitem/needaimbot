@@ -1,0 +1,242 @@
+{
+  "stationary|baseline": {
+    "trajectory": "stationary",
+    "config": "baseline",
+    "mae": 1.53,
+    "rms": 1.84,
+    "p95": 3.51,
+    "settle": 20.4,
+    "oscillation": 49.6,
+    "misses": 8.0
+  },
+  "stationary|sem_pags": {
+    "trajectory": "stationary",
+    "config": "sem_pags",
+    "mae": 1.69,
+    "rms": 1.99,
+    "p95": 3.95,
+    "settle": 30.4,
+    "oscillation": 52.8,
+    "misses": 8.0
+  },
+  "stationary|all_novel": {
+    "trajectory": "stationary",
+    "config": "all_novel",
+    "mae": 1.66,
+    "rms": 1.92,
+    "p95": 3.25,
+    "settle": 22.4,
+    "oscillation": 42.6,
+    "misses": 8.0
+  },
+  "stationary|with_lead": {
+    "trajectory": "stationary",
+    "config": "with_lead",
+    "mae": 1.53,
+    "rms": 1.82,
+    "p95": 3.25,
+    "settle": 20.4,
+    "oscillation": 50.8,
+    "misses": 8.0
+  },
+  "slow_strafe|baseline": {
+    "trajectory": "slow_strafe",
+    "config": "baseline",
+    "mae": 6.88,
+    "rms": 7.08,
+    "p95": 9.61,
+    "settle": 300.0,
+    "oscillation": 26.8,
+    "misses": 8.0
+  },
+  "slow_strafe|sem_pags": {
+    "trajectory": "slow_strafe",
+    "config": "sem_pags",
+    "mae": 4.53,
+    "rms": 4.94,
+    "p95": 7.99,
+    "settle": 300.0,
+    "oscillation": 36.0,
+    "misses": 8.0
+  },
+  "slow_strafe|all_novel": {
+    "trajectory": "slow_strafe",
+    "config": "all_novel",
+    "mae": 5.0,
+    "rms": 5.43,
+    "p95": 8.72,
+    "settle": 268.0,
+    "oscillation": 27.8,
+    "misses": 8.0
+  },
+  "slow_strafe|with_lead": {
+    "trajectory": "slow_strafe",
+    "config": "with_lead",
+    "mae": 6.33,
+    "rms": 6.56,
+    "p95": 9.07,
+    "settle": 300.0,
+    "oscillation": 30.4,
+    "misses": 8.0
+  },
+  "fast_strafe|baseline": {
+    "trajectory": "fast_strafe",
+    "config": "baseline",
+    "mae": 17.1,
+    "rms": 17.29,
+    "p95": 20.93,
+    "settle": 300.0,
+    "oscillation": 26.8,
+    "misses": 8.0
+  },
+  "fast_strafe|sem_pags": {
+    "trajectory": "fast_strafe",
+    "config": "sem_pags",
+    "mae": 11.11,
+    "rms": 11.4,
+    "p95": 15.63,
+    "settle": 300.0,
+    "oscillation": 32.8,
+    "misses": 8.0
+  },
+  "fast_strafe|all_novel": {
+    "trajectory": "fast_strafe",
+    "config": "all_novel",
+    "mae": 13.84,
+    "rms": 14.3,
+    "p95": 20.36,
+    "settle": 300.0,
+    "oscillation": 27.2,
+    "misses": 8.0
+  },
+  "fast_strafe|with_lead": {
+    "trajectory": "fast_strafe",
+    "config": "with_lead",
+    "mae": 13.81,
+    "rms": 14.03,
+    "p95": 17.85,
+    "settle": 300.0,
+    "oscillation": 30.0,
+    "misses": 8.0
+  },
+  "sine_wave|baseline": {
+    "trajectory": "sine_wave",
+    "config": "baseline",
+    "mae": 2.29,
+    "rms": 2.58,
+    "p95": 4.44,
+    "settle": 107.0,
+    "oscillation": 48.0,
+    "misses": 8.0
+  },
+  "sine_wave|sem_pags": {
+    "trajectory": "sine_wave",
+    "config": "sem_pags",
+    "mae": 2.25,
+    "rms": 2.55,
+    "p95": 4.44,
+    "settle": 57.6,
+    "oscillation": 56.4,
+    "misses": 8.0
+  },
+  "sine_wave|all_novel": {
+    "trajectory": "sine_wave",
+    "config": "all_novel",
+    "mae": 2.28,
+    "rms": 2.55,
+    "p95": 4.35,
+    "settle": 50.0,
+    "oscillation": 43.8,
+    "misses": 8.0
+  },
+  "sine_wave|with_lead": {
+    "trajectory": "sine_wave",
+    "config": "with_lead",
+    "mae": 2.25,
+    "rms": 2.54,
+    "p95": 4.35,
+    "settle": 100.0,
+    "oscillation": 52.2,
+    "misses": 8.0
+  },
+  "diagonal|baseline": {
+    "trajectory": "diagonal",
+    "config": "baseline",
+    "mae": 12.9,
+    "rms": 13.07,
+    "p95": 16.18,
+    "settle": 300.0,
+    "oscillation": 3.6,
+    "misses": 8.0
+  },
+  "diagonal|sem_pags": {
+    "trajectory": "diagonal",
+    "config": "sem_pags",
+    "mae": 7.31,
+    "rms": 7.7,
+    "p95": 11.74,
+    "settle": 300.0,
+    "oscillation": 12.8,
+    "misses": 8.0
+  },
+  "diagonal|all_novel": {
+    "trajectory": "diagonal",
+    "config": "all_novel",
+    "mae": 8.55,
+    "rms": 9.05,
+    "p95": 14.08,
+    "settle": 300.0,
+    "oscillation": 10.4,
+    "misses": 8.0
+  },
+  "diagonal|with_lead": {
+    "trajectory": "diagonal",
+    "config": "with_lead",
+    "mae": 11.12,
+    "rms": 11.31,
+    "p95": 14.52,
+    "settle": 300.0,
+    "oscillation": 4.4,
+    "misses": 8.0
+  },
+  "step_response|baseline": {
+    "trajectory": "step_response",
+    "config": "baseline",
+    "mae": 1.84,
+    "rms": 3.45,
+    "p95": 3.91,
+    "settle": 37.8,
+    "oscillation": 50.0,
+    "misses": 8.0
+  },
+  "step_response|sem_pags": {
+    "trajectory": "step_response",
+    "config": "sem_pags",
+    "mae": 2.0,
+    "rms": 3.55,
+    "p95": 4.42,
+    "settle": 47.0,
+    "oscillation": 54.0,
+    "misses": 8.0
+  },
+  "step_response|all_novel": {
+    "trajectory": "step_response",
+    "config": "all_novel",
+    "mae": 2.03,
+    "rms": 3.7,
+    "p95": 3.94,
+    "settle": 44.2,
+    "oscillation": 43.8,
+    "misses": 8.0
+  },
+  "step_response|with_lead": {
+    "trajectory": "step_response",
+    "config": "with_lead",
+    "mae": 1.84,
+    "rms": 3.43,
+    "p95": 4.07,
+    "settle": 35.0,
+    "oscillation": 50.8,
+    "misses": 8.0
+  }
+}
