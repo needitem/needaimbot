@@ -10,6 +10,33 @@
 
 namespace gpa {
 
+// --- Hardcoded internal constants (tuned, not user-configurable) ---
+// kHeadDeprioritized and kAimHEma are in simple_postprocess.h (used by both files).
+// Lead term gates
+__device__ constexpr float kLeadVgate       = 8.6f;
+__device__ constexpr float kLeadErrGate     = 22.25f;
+__device__ constexpr float kFfVEma          = 0.137f;
+__device__ constexpr float kFfEgoLag        = 2.85f;
+// SEM internals
+__device__ constexpr float kSemRate         = 0.02f;
+__device__ constexpr float kSemMax          = 3.0f;
+__device__ constexpr float kSemDecay        = 0.95f;
+// CGA internals
+__device__ constexpr float kCgaConfLow      = 0.4f;
+__device__ constexpr float kCgaConfHigh     = 0.8f;
+__device__ constexpr float kCgaSpeedThreshold = 3.0f;
+// JCAD internals
+__device__ constexpr float kJcadAlpha       = 0.15f;
+__device__ constexpr float kJcadBaseDb      = 0.5f;
+__device__ constexpr float kJcadJitterDb    = 3.0f;
+__device__ constexpr float kJcadJitterThreshold = 2.0f;
+// PAGS internals
+__device__ constexpr float kPagsAcquireThreshold = 15.0f;
+__device__ constexpr float kPagsOscThreshold = 0.5f;
+__device__ constexpr float kPagsAcquireMult  = 1.1f;
+__device__ constexpr float kPagsOscMult      = 0.6f;
+__device__ constexpr float kPagsAlpha        = 0.2f;
+
 // alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
 __device__ __forceinline__ float oneEuroAlpha(float cutoff) {
     const float w = 2.0f * 3.14159265f * fmaxf(cutoff, 1e-4f);
@@ -116,15 +143,15 @@ __device__ __forceinline__ void inflightAt(const AimState* s, float lag,
 //   error gate  e0^2/(e0^2+|err|^2)  -> ~0 while acquiring, so the huge one-frame
 //                                       velocity of a position jump is never led
 //                                       on (that is what would overshoot).
-__device__ __forceinline__ float leadGate(const AimConfig& cfg, const AimState* s,
+__device__ __forceinline__ float leadGate(const AimState* s,
                                           float error_x, float error_y) {
     float g = 1.0f;
-    if (cfg.lead_vgate > 0.0f) {
+    {
         const float sp = sqrtf(s->vel_x * s->vel_x + s->vel_y * s->vel_y);
-        g *= sp / (sp + cfg.lead_vgate);
+        g *= sp / (sp + kLeadVgate);
     }
-    if (cfg.lead_err_gate > 0.0f) {
-        const float e0 = cfg.lead_err_gate;
+    {
+        const float e0 = kLeadErrGate;
         const float e2 = error_x * error_x + error_y * error_y;
         g *= (e0 * e0) / (e0 * e0 + e2);
     }
@@ -233,7 +260,7 @@ __device__ __forceinline__ void computeAimMovement(
     // response - by holding the EMA or by zeroing it before the move - is
     // 0.03-0.22% WORSE, on both gain profiles. Do not "fix" it.
     const bool class_changed =
-        (aim_config.class_switch_reject != 0.0f && !fresh_track &&
+        (!fresh_track &&
          aim_state->prev_class >= 0 && target_class != aim_state->prev_class);
     if (class_changed) {
         // zero drift for this frame: velocity sees no jump at all
@@ -248,15 +275,14 @@ __device__ __forceinline__ void computeAimMovement(
     // The in-flight sum is computed here and subtracted from the error further
     // down.
     float inf_x = 0.0f, inf_y = 0.0f;
-    const bool use_comp =
-        (aim_config.inflight_comp > 0.0f && aim_config.deadtime_frames > 0.0f);
+    const bool use_comp = (aim_config.deadtime_frames > 0.0f);
     if (use_comp) {
         inflightSum(aim_state, aim_config.deadtime_frames, inf_x, inf_y);
     }
 
     float target_center_x = raw_center_x;
     float target_center_y = raw_center_y;
-    if (aim_config.oneeuro_enabled != 0.0f) {
+    if (kOneEuroEnabled != 0.0f) {
         const float in_x = raw_center_x, in_y = raw_center_y;
         const float carry_x = aim_state->filt_x, carry_y = aim_state->filt_y;
         if (aim_state->has_track) {
@@ -295,7 +321,7 @@ __device__ __forceinline__ void computeAimMovement(
             const float jdx = raw_center_x - aim_state->prev_raw_x;
             const float jdy = raw_center_y - aim_state->prev_raw_y;
             const float jcad_disp = sqrtf(jdx * jdx + jdy * jdy);
-            const float ja = aim_config.jcad_alpha;
+            const float ja = kJcadAlpha;
             aim_state->jcad_ew_mean = ja * jcad_disp
                                     + (1.0f - ja) * aim_state->jcad_ew_mean;
             const float jdiff = jcad_disp - aim_state->jcad_ew_mean;
@@ -324,7 +350,7 @@ __device__ __forceinline__ void computeAimMovement(
 
         if (aim_state->has_track) {
             float ax = 0.0f, ay = 0.0f;
-            inflightAt(aim_state, aim_config.ff_ego_lag, ax, ay);
+            inflightAt(aim_state, kFfEgoLag, ax, ay);
             const float maxDrift = 60.0f;   // model px/frame sanity clamp
             float dvx = (med_x - aim_state->prev_raw_x)
                       + ((movement_scale_x != 0.0f) ? ax / movement_scale_x : 0.0f);
@@ -332,7 +358,7 @@ __device__ __forceinline__ void computeAimMovement(
                       + ((movement_scale_y != 0.0f) ? ay / movement_scale_y : 0.0f);
             dvx = fminf(fmaxf(dvx, -maxDrift), maxDrift);
             dvy = fminf(fmaxf(dvy, -maxDrift), maxDrift);
-            const float a = fminf(fmaxf(aim_config.ff_v_ema, 0.0f), 1.0f);
+            const float a = kFfVEma;
             aim_state->vel_x = (1.0f - a) * aim_state->vel_x + a * dvx;
             aim_state->vel_y = (1.0f - a) * aim_state->vel_y + a * dvy;
         } else {
@@ -346,8 +372,8 @@ __device__ __forceinline__ void computeAimMovement(
         }
 
         // Acceleration estimation: EMA of velocity change per frame.
-        if (aim_config.accel_ema > 0.0f) {
-            const float a_ema = fminf(fmaxf(aim_config.accel_ema, 0.0f), 1.0f);
+        {
+            const float a_ema = kAccelEma;
             const float dax = aim_state->vel_x - aim_state->prev_vel_x;
             const float day = aim_state->vel_y - aim_state->prev_vel_y;
             const float maxAccel = 15.0f;
@@ -385,8 +411,8 @@ __device__ __forceinline__ void computeAimMovement(
     // the error our in-flight moves have NOT already addressed. Without this
     // the loop double-corrects and rings; with it, kp can go higher.
     if (use_comp) {
-        if (movement_scale_x != 0.0f) error_x -= aim_config.inflight_comp * inf_x / movement_scale_x;
-        if (movement_scale_y != 0.0f) error_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
+        if (movement_scale_x != 0.0f) error_x -= inf_x / movement_scale_x;
+        if (movement_scale_y != 0.0f) error_y -= inf_y / movement_scale_y;
     }
 
     // --- JCAD: adaptive deadband. J = var / (mean^2 + eps): high when variance
@@ -397,8 +423,8 @@ __device__ __forceinline__ void computeAimMovement(
     if (aim_config.jcad_enabled != 0.0f) {
         const float mean_sq = aim_state->jcad_ew_mean * aim_state->jcad_ew_mean;
         const float J = aim_state->jcad_ew_var / (mean_sq + 1e-6f);
-        const float sat_J = fminf(J / aim_config.jcad_jitter_threshold, 1.0f);
-        const float db = aim_config.jcad_base_db + aim_config.jcad_jitter_db * sat_J;
+        const float sat_J = fminf(J / kJcadJitterThreshold, 1.0f);
+        const float db = kJcadBaseDb + kJcadJitterDb * sat_J;
         const float err_mag = sqrtf(error_x * error_x + error_y * error_y);
         if (err_mag < db) {
             error_x = 0.0f;
@@ -413,7 +439,7 @@ __device__ __forceinline__ void computeAimMovement(
     // Gated exactly like the lead term: ~0 at rest (noise) and ~0 while acquiring
     // (a position jump's one-frame velocity must never be extrapolated).
     if (aim_config.predict_frames > 0.0f) {
-        const float g = leadGate(aim_config, aim_state, error_x, error_y);
+        const float g = leadGate(aim_state, error_x, error_y);
         const float t = aim_config.predict_frames;
         error_x += g * (t * aim_state->vel_x
                          + 0.5f * t * t * aim_state->accel_x);
@@ -450,18 +476,18 @@ __device__ __forceinline__ void computeAimMovement(
     // and together they beat either alone (measured).
     float ff_x = 0.0f, ff_y = 0.0f;
     if (aim_config.ff_gain > 0.0f) {
-        const float g = leadGate(aim_config, aim_state, error_x, error_y);
+        const float g = leadGate(aim_state, error_x, error_y);
         ff_x = aim_config.ff_gain * g * aim_state->vel_x;
         ff_y = aim_config.ff_gain * g * aim_state->vel_y;
     }
 
     float movement_x =
         (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x,
-                        aim_config.fine_track_boost, aim_config.fine_track_range)
+                        kFineTrackBoost, kFineTrackRange)
          + aim_config.kd_x * aim_state->derr_x + ff_x) * movement_scale_x;
     float movement_y =
         (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y,
-                        aim_config.fine_track_boost, aim_config.fine_track_range)
+                        kFineTrackBoost, kFineTrackRange)
          + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
     // --- SEM: Signed-Error Momentum. Accumulates momentum while the error sign
@@ -476,22 +502,20 @@ __device__ __forceinline__ void computeAimMovement(
             aim_state->sem_y = 0.0f;
         }
         // Decay existing momentum
-        aim_state->sem_x *= aim_config.sem_decay;
-        aim_state->sem_y *= aim_config.sem_decay;
+        aim_state->sem_x *= kSemDecay;
+        aim_state->sem_y *= kSemDecay;
         // X axis: accumulate or kill
         if (error_x * aim_state->sem_x < 0.0f) {
             aim_state->sem_x = 0.0f;  // sign flip: overshoot detected
         }
-        aim_state->sem_x += aim_config.sem_rate * error_x;
-        aim_state->sem_x = fminf(fmaxf(aim_state->sem_x, -aim_config.sem_max),
-                                 aim_config.sem_max);
+        aim_state->sem_x += kSemRate * error_x;
+        aim_state->sem_x = fminf(fmaxf(aim_state->sem_x, -kSemMax), kSemMax);
         // Y axis: accumulate or kill
         if (error_y * aim_state->sem_y < 0.0f) {
             aim_state->sem_y = 0.0f;
         }
-        aim_state->sem_y += aim_config.sem_rate * error_y;
-        aim_state->sem_y = fminf(fmaxf(aim_state->sem_y, -aim_config.sem_max),
-                                 aim_config.sem_max);
+        aim_state->sem_y += kSemRate * error_y;
+        aim_state->sem_y = fminf(fmaxf(aim_state->sem_y, -kSemMax), kSemMax);
         // Add momentum to output movement
         movement_x += aim_state->sem_x * movement_scale_x;
         movement_y += aim_state->sem_y * movement_scale_y;
@@ -519,11 +543,10 @@ __device__ __forceinline__ void computeAimMovement(
                               sign_x != aim_state->pags_prev_sign_x) ? 1.0f : 0.0f;
         const float flip_y = (aim_state->pags_prev_sign_y != 0 && sign_y != 0 &&
                               sign_y != aim_state->pags_prev_sign_y) ? 1.0f : 0.0f;
-        const float pa = aim_config.pags_alpha;
-        aim_state->pags_flip_rate_x = pa * flip_x
-                                    + (1.0f - pa) * aim_state->pags_flip_rate_x;
-        aim_state->pags_flip_rate_y = pa * flip_y
-                                    + (1.0f - pa) * aim_state->pags_flip_rate_y;
+        aim_state->pags_flip_rate_x = kPagsAlpha * flip_x
+                                    + (1.0f - kPagsAlpha) * aim_state->pags_flip_rate_x;
+        aim_state->pags_flip_rate_y = kPagsAlpha * flip_y
+                                    + (1.0f - kPagsAlpha) * aim_state->pags_flip_rate_y;
         if (sign_x != 0) aim_state->pags_prev_sign_x = sign_x;
         if (sign_y != 0) aim_state->pags_prev_sign_y = sign_y;
         // Phase detection: use max flip rate across both axes
@@ -531,10 +554,10 @@ __device__ __forceinline__ void computeAimMovement(
         const float flip_rate = fmaxf(aim_state->pags_flip_rate_x,
                                       aim_state->pags_flip_rate_y);
         float target_mult;
-        if (err_mag > aim_config.pags_acquire_threshold) {
-            target_mult = aim_config.pags_acquire_mult;   // ACQUIRE
-        } else if (flip_rate > aim_config.pags_osc_threshold) {
-            target_mult = aim_config.pags_osc_mult;       // OSCILLATE
+        if (err_mag > kPagsAcquireThreshold) {
+            target_mult = kPagsAcquireMult;   // ACQUIRE
+        } else if (flip_rate > kPagsOscThreshold) {
+            target_mult = kPagsOscMult;       // OSCILLATE
         } else {
             target_mult = 1.0f;                           // TRACK
         }
@@ -585,10 +608,8 @@ __device__ __forceinline__ void computeAimMovement(
     if (aim_config.cga_enabled != 0.0f) {
         const float speed = sqrtf(aim_state->vel_x * aim_state->vel_x +
                                   aim_state->vel_y * aim_state->vel_y);
-        const float speed_bypass = speed / (speed + aim_config.cga_speed_threshold
-                                            + 1e-7f);
-        const float conf_gate = gpaSmoothstep(aim_config.cga_conf_low,
-                                              aim_config.cga_conf_high,
+        const float speed_bypass = speed / (speed + kCgaSpeedThreshold + 1e-7f);
+        const float conf_gate = gpaSmoothstep(kCgaConfLow, kCgaConfHigh,
                                               detection_confidence);
         const float gate = fmaxf(conf_gate, speed_bypass);
         movement_x *= gate;

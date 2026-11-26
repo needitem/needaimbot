@@ -555,19 +555,10 @@ inline bool aimConfigNearlyEqual(const AimConfig& a, const AimConfig& b) {
            nearlyEqual(a.max_step, b.max_step) &&
            nearlyEqual(a.distance_stickiness_factor, b.distance_stickiness_factor) &&
            (a.track_persistence_frames == b.track_persistence_frames) &&
-           nearlyEqual(a.inflight_comp, b.inflight_comp) &&
            nearlyEqual(a.deadtime_frames, b.deadtime_frames) &&
            nearlyEqual(a.ff_gain, b.ff_gain) &&
-           nearlyEqual(a.ff_ego_lag, b.ff_ego_lag) &&
-           nearlyEqual(a.ff_v_ema, b.ff_v_ema) &&
-           nearlyEqual(a.lead_vgate, b.lead_vgate) &&
-           nearlyEqual(a.lead_err_gate, b.lead_err_gate) &&
            nearlyEqual(a.predict_frames, b.predict_frames) &&
-           nearlyEqual(a.class_switch_reject, b.class_switch_reject) &&
-           nearlyEqual(a.head_deprioritized, b.head_deprioritized) &&
-           nearlyEqual(a.aim_h_ema, b.aim_h_ema) &&
            nearlyEqual(a.aim_y_scale, b.aim_y_scale) &&
-           nearlyEqual(a.oneeuro_enabled, b.oneeuro_enabled) &&
            nearlyEqual(a.oneeuro_min_cutoff, b.oneeuro_min_cutoff) &&
            nearlyEqual(a.oneeuro_beta, b.oneeuro_beta) &&
            nearlyEqual(a.shoot_offset_x, b.shoot_offset_x) &&

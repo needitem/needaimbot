@@ -292,8 +292,7 @@ __global__ void stage1DecodeAndSelectKernel(
 {
     const float distance_stickiness_factor =
         d_aim_config ? d_aim_config->distance_stickiness_factor : 0.0f;
-    const int head_deprioritized =
-        (d_aim_config && d_aim_config->head_deprioritized != 0.0f) ? 1 : 0;
+    const int head_deprioritized = (gpa::kHeadDeprioritized != 0.0f) ? 1 : 0;
     __shared__ Detection s_prevTarget;
     __shared__ bool s_prevValid;
     __shared__ Detection s_warpBestDistDet[MAX_SELECTION_WARPS];
@@ -502,8 +501,7 @@ __global__ void stage2FinalizeKernel(
 
     // Same body-priority key stage 1 ranked by. Recomputed here rather than
     // carried through global memory: the candidate's classId already says it.
-    const int head_deprioritized =
-        (d_aim_config && d_aim_config->head_deprioritized != 0.0f) ? 1 : 0;
+    const int head_deprioritized = (gpa::kHeadDeprioritized != 0.0f) ? 1 : 0;
 
     Detection localBestByDist = {};
     localBestByDist.classId = -1;
@@ -716,7 +714,7 @@ __global__ void stage2FinalizeKernel(
         // belong to the same anchor as last frame - a fresh track or a head<->body
         // flip means a DIFFERENT box, and carrying its height over would drag the
         // aim point off by the difference for as long as the EMA takes to catch up.
-        const float a = aim_config.aim_h_ema;
+        const float a = gpa::kAimHEma;
         if (a > 0.0f) {
             const bool reseed = (d_aim_state->has_track == 0) ||
                                 (d_aim_state->h_ema <= 0.0f) ||

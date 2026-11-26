@@ -474,7 +474,7 @@ int main(int argc, char* argv[]) {
                 w, h, maxPipelineInFlight,
                 cfg.confThreshold, cfg.headClassId,
                 allowedClassMask, rightGpuAimConfig,
-                cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+                pd_controller::Settings::kIouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             ++preCaptureSuccess;
         } else {
             std::cerr << "[Simple] Pre-capture FAILED for " << w << "x" << h << std::endl;
@@ -564,7 +564,7 @@ int main(int argc, char* argv[]) {
             maxPipelineInFlight,
             cfg.confThreshold, cfg.headClassId,
             allowedClassMask, rightGpuAimConfig,
-            cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint);
+            pd_controller::Settings::kIouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
             graphCaptureFailedForShape && failedGraphW == sourceW && failedGraphH == sourceH;
         if (graphReady || graphFailedForThisShape) {
@@ -582,7 +582,7 @@ int main(int argc, char* argv[]) {
                 maxPipelineInFlight,
                 cfg.confThreshold, cfg.headClassId,
                 allowedClassMask, rightGpuAimConfig,
-                cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
+                pd_controller::Settings::kIouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint)) {
             graphCaptureFailedForShape = false;
             failedGraphW = 0;
             failedGraphH = 0;
@@ -836,7 +836,6 @@ int main(int argc, char* argv[]) {
             }
             frameAimConfig.deadtime_frames = static_cast<float>(
                 std::clamp(dtFrames, 0.0, static_cast<double>(gpa::AimState::kInflightMax)));
-            frameAimConfig.ff_ego_lag = frameAimConfig.deadtime_frames;
             // Say what it resolved to, but only when it actually moves - a silent
             // rescale is exactly the kind of thing that hid the last two bugs.
             //
@@ -896,7 +895,6 @@ int main(int argc, char* argv[]) {
                     adj = std::clamp(adj, -kDeadtimeAdaptMax, kDeadtimeAdaptMax);
                     frameAimConfig.deadtime_frames = static_cast<float>(std::clamp(
                         static_cast<double>(frameAimConfig.deadtime_frames) + adj, 0.0, 4.0));
-                    frameAimConfig.ff_ego_lag = frameAimConfig.deadtime_frames;
                 }
             }
         }
@@ -911,7 +909,7 @@ int main(int argc, char* argv[]) {
             maxPipelineInFlight,
             cfg.confThreshold, cfg.headClassId,
             allowedClassMask, rightGpuAimConfig,
-            cfg.pd.iou_stickiness_threshold, cfg.headAimPoint, cfg.bodyAimPoint);
+            pd_controller::Settings::kIouStickinessThreshold, cfg.headAimPoint, cfg.bodyAimPoint);
         const bool graphFailedForThisShape =
             graphCaptureFailedForShape && failedGraphW == width && failedGraphH == height;
         if (graphReady || graphFailedForThisShape) {
@@ -954,7 +952,7 @@ int main(int argc, char* argv[]) {
             cfg.confThreshold, cfg.headClassId,
             allowedClassMask,
             frameAimConfig,
-            cfg.pd.iou_stickiness_threshold,
+            pd_controller::Settings::kIouStickinessThreshold,
             cfg.headAimPoint, cfg.bodyAimPoint,
             inferenceCallback, ticket);
         if (cfg.perfStatsEnabled) {

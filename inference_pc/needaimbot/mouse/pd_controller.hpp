@@ -1,12 +1,8 @@
 #pragma once
 
 // Nonlinear P(D) aim controller: owns the tuned gains (kp/kd/softness per aim
-// profile), the shared shaping around them (One Euro pre-filter, same-target
-// stickiness, per-frame max step), and their JSON
-// load/save/print - decoupled from simple_main.cpp's
-// app-wide Config. The actual PD math runs on the GPU (see
-// needaimbot/cuda/simple_postprocess.cu); this header only builds the
-// gpa::AimConfig the GPU kernel consumes.
+// profile) and the user-facing config knobs, with JSON load/save/print.
+// Internal tuned constants live in pd_controller.cuh as __device__ constexpr.
 
 #include <algorithm>
 #include <iostream>
@@ -16,7 +12,6 @@
 
 namespace pd_controller {
 
-// One aim profile's tuned gains (there are two: right-click and thumb/Side2).
 struct Gains {
     float kp_x = 0.55f;
     float kp_y = 0.6f;
@@ -31,65 +26,16 @@ public:
     Gains right{0.445f, 0.406f, 8.6f, 6.57f, 0.052f, 0.037f};
     Gains thumb{0.709f, 0.408f, 4.66f, 9.77f, 0.02f, 0.082f};
 
-    // Same-target stickiness for tracking (shared by both profiles).
-    float iou_stickiness_threshold = 0.3f;
-    float distance_stickiness_factor = 0.4f;
-    int track_persistence_frames = 3;
-
-    // Dead-time compensation: subtract the moves still in flight (emitted within
-    // the last deadtime_frames, not yet visible in the detection) from the
-    // error. Removes the double-correction that causes overshoot/ringing.
-    // 0 = off (legacy). deadtime_frames must match the rig's measured
-    // emit->visible lag (bench/calibrate.py STEP-RESPONSE).
-    // FRACTIONAL: the real emit->visible lag is ~1.13 frames here, not an
-    // integer, so rounding it either under- or over-compensates. 1.0 reproduces
-    // the old integer behaviour exactly.
-    float inflight_comp = 1.0f;
     float inflight_deadtime_frames = 2.85f;
-
-    // Lead / feedforward on the ego-corrected target velocity (see
-    // needaimbot/cuda/simple_postprocess.h for why this is sound now and was not
-    // before the in-flight ring existed). ff_gain 0 = off (pure P+D).
     float ff_gain = 2.924f;
-    float ff_ego_lag = 2.85f;
-    float ff_v_ema = 0.137f;
-    // ONE shared gate pair for BOTH lead terms. Per-term gates (pred_vgate /
-    // pred_err_gate) were removed: they gated the same velocity against the same
-    // error and bought <0.5% for twice the tuning surface; a properly tuned shared
-    // pair beat the four-knob version (-0.8% error at equal ringing).
-    float lead_vgate = 8.6f;
-    float lead_err_gate = 22.25f;
-    // Symmetric dead-time comp: extrapolate the TARGET forward over the dead time
-    // (inflight_comp only removed OUR motion). 0 = off.
     float predict_frames = 5.47f;
-    // Acceleration-aware prediction EMA weight (0..1). 0 = disable (pure
-    // constant-velocity). See simple_postprocess.h accel_ema for details.
-    float accel_ema = 0.15f;
-    // Reject the head<->body anchor-flip artifact (the selected classId already
-    // identifies those frames exactly). 1 = on. See simple_postprocess.h.
-    float class_switch_reject = 1.0f;
-    // body 가 잡히면 항상 body 를 쓰고, head 는 body 가 없을 때만 쓴다.
-    float head_deprioritized = 1.0f;
-    // body 조준점을 y1+k*h 대신 cy+(k-0.5)*h_ema 로 관측 (같은 점, 더 조용함).
-    // 0 = 끔. 근거·실측치는 simple_postprocess.h 의 aim_h_ema 주석.
-    float aim_h_ema = 0.2f;
-    // 세로 보정 세기. Y 출력 전체(P+D+리드)에 곱한다. 1.0 = 튜닝된 그대로,
-    // 0 = 가로 전용. 두 프로필(우클릭/thumb)이 공유한다 - 취향 노브라 프로필별로
-    // 나눌 이유가 없다. 자세한 근거는 simple_postprocess.h 의 aim_y_scale 주석.
     float aim_y_scale = 1.0f;
-    // Fine-tracking kp boost (see AimConfig for the full description).
-    // boost > 1.0 increases kp when |error| < softness * range, tapering
-    // linearly to 1.0 at the boundary. 1.0 or range <= 0 = off.
-    float fine_track_boost = 1.3f;
-    float fine_track_range = 0.5f;
-
-    // Per-frame max move (output px). 0 = disabled (unbounded).
     float max_step = 11.37f;
-
-    // One Euro adaptive low-pass on the target center (jitter suppression).
-    bool oneeuro_enabled = true;
     float oneeuro_min_cutoff = 0.049f;
     float oneeuro_beta = 0.02f;
+
+    // IoU stickiness threshold is passed separately to the kernel.
+    static constexpr float kIouStickinessThreshold = 0.3f;
 
     gpa::AimConfig rightGpuConfig() const { return toGpuConfig(right); }
     gpa::AimConfig thumbGpuConfig() const { return toGpuConfig(thumb); }
@@ -104,8 +50,6 @@ public:
 
         if (j.contains("thumb_aim_kp_x")) thumb.kp_x = j["thumb_aim_kp_x"];
         if (j.contains("thumb_aim_kp_y")) thumb.kp_y = j["thumb_aim_kp_y"];
-        // Thumb softness/kd default to the right-click profile's values when
-        // not explicitly configured.
         thumb.softness_x = j.contains("thumb_aim_softness_x")
                                 ? j["thumb_aim_softness_x"].get<float>()
                                 : right.softness_x;
@@ -119,64 +63,20 @@ public:
                          ? j["thumb_aim_kd_y"].get<float>()
                          : right.kd_y;
 
-        if (j.contains("iou_stickiness_threshold")) iou_stickiness_threshold = j["iou_stickiness_threshold"];
-        if (j.contains("distance_stickiness_factor")) distance_stickiness_factor = j["distance_stickiness_factor"];
-        if (j.contains("track_persistence_frames")) {
-            const int v = j["track_persistence_frames"];
-            track_persistence_frames = std::clamp(v, 0, 60);
-        }
-
-        if (j.contains("inflight_comp")) inflight_comp = j["inflight_comp"];
         if (j.contains("inflight_deadtime_frames")) {
             const float v = j["inflight_deadtime_frames"];
             inflight_deadtime_frames = std::clamp(v, 0.0f, 4.0f);
         }
         if (j.contains("ff_gain")) ff_gain = j["ff_gain"];
-        if (j.contains("ff_ego_lag")) {
-            const float v = j["ff_ego_lag"];
-            ff_ego_lag = std::clamp(v, 1.0f, 4.0f);
-        }
-        if (j.contains("ff_v_ema")) {
-            const float v = j["ff_v_ema"];
-            ff_v_ema = std::clamp(v, 0.0f, 1.0f);
-        }
-        if (j.contains("lead_vgate")) lead_vgate = j["lead_vgate"];
-        if (j.contains("lead_err_gate")) lead_err_gate = j["lead_err_gate"];
         if (j.contains("predict_frames")) {
             const float v = j["predict_frames"];
             predict_frames = std::clamp(v, 0.0f, 6.0f);
-        }
-        if (j.contains("accel_ema")) {
-            const float v = j["accel_ema"];
-            accel_ema = std::clamp(v, 0.0f, 1.0f);
-        }
-        if (j.contains("head_deprioritized")) {
-            const bool v = j["head_deprioritized"];
-            head_deprioritized = v ? 1.0f : 0.0f;
-        }
-        if (j.contains("aim_h_ema")) {
-            const float v = j["aim_h_ema"];
-            aim_h_ema = std::clamp(v, 0.0f, 1.0f);
         }
         if (j.contains("aim_y_scale")) {
             const float v = j["aim_y_scale"];
             aim_y_scale = std::clamp(v, 0.0f, 4.0f);
         }
-        if (j.contains("class_switch_reject")) {
-            const bool v = j["class_switch_reject"];
-            class_switch_reject = v ? 1.0f : 0.0f;
-        }
-        if (j.contains("fine_track_boost")) {
-            const float v = j["fine_track_boost"];
-            fine_track_boost = std::clamp(v, 1.0f, 3.0f);
-        }
-        if (j.contains("fine_track_range")) {
-            const float v = j["fine_track_range"];
-            fine_track_range = std::clamp(v, 0.0f, 1.0f);
-        }
         if (j.contains("aim_max_step")) max_step = j["aim_max_step"];
-
-        if (j.contains("oneeuro_enabled")) oneeuro_enabled = j["oneeuro_enabled"];
         if (j.contains("oneeuro_min_cutoff")) oneeuro_min_cutoff = j["oneeuro_min_cutoff"];
         if (j.contains("oneeuro_beta")) oneeuro_beta = j["oneeuro_beta"];
     }
@@ -195,31 +95,11 @@ public:
         j["thumb_aim_kd_x"] = thumb.kd_x;
         j["thumb_aim_kd_y"] = thumb.kd_y;
 
-        j["_section_tracking"] = "===== Target tracking / stickiness =====";
-        j["iou_stickiness_threshold"] = iou_stickiness_threshold;
-        j["distance_stickiness_factor"] = distance_stickiness_factor;
-        j["track_persistence_frames"] = track_persistence_frames;
-        j["inflight_comp"] = inflight_comp;
         j["inflight_deadtime_frames"] = inflight_deadtime_frames;
-        j["aim_max_step"] = max_step;
-
-        j["_section_lead"] = "===== Lead term (ego-corrected velocity feedforward) =====";
         j["ff_gain"] = ff_gain;
-        j["ff_ego_lag"] = ff_ego_lag;
-        j["ff_v_ema"] = ff_v_ema;
-        j["lead_vgate"] = lead_vgate;
-        j["lead_err_gate"] = lead_err_gate;
         j["predict_frames"] = predict_frames;
-        j["accel_ema"] = accel_ema;
-        j["class_switch_reject"] = (class_switch_reject != 0.0f);
-        j["head_deprioritized"] = (head_deprioritized != 0.0f);
-        j["aim_h_ema"] = aim_h_ema;
         j["aim_y_scale"] = aim_y_scale;
-        j["fine_track_boost"] = fine_track_boost;
-        j["fine_track_range"] = fine_track_range;
-
-        j["_section_oneeuro"] = "===== One Euro center filter (jitter suppression) =====";
-        j["oneeuro_enabled"] = oneeuro_enabled;
+        j["aim_max_step"] = max_step;
         j["oneeuro_min_cutoff"] = oneeuro_min_cutoff;
         j["oneeuro_beta"] = oneeuro_beta;
     }
@@ -231,48 +111,19 @@ public:
         std::cout << "[Config] Thumb P: Kp(" << thumb.kp_x << "," << thumb.kp_y
                   << ") Softness(" << thumb.softness_x << "," << thumb.softness_y
                   << ") Kd(" << thumb.kd_x << "," << thumb.kd_y << ")" << std::endl;
-        std::cout << "[Config] IoU stickiness: " << iou_stickiness_threshold << std::endl;
-        std::cout << "[Config] Distance stickiness factor: " << distance_stickiness_factor
-                  << (distance_stickiness_factor > 0.0f ? " (ON)" : " (OFF)") << std::endl;
-        std::cout << "[Config] Dead-time compensation: "
-                  << (inflight_comp > 0.0f
-                          ? "ON (comp=" + std::to_string(inflight_comp) + ", lag=" +
-                                std::to_string(inflight_deadtime_frames) + " frames)"
-                          : std::string("OFF"))
+        std::cout << "[Config] Dead-time: lag=" << inflight_deadtime_frames
+                  << " frames" << std::endl;
+        std::cout << "[Config] Lead ff_gain: "
+                  << (ff_gain > 0.0f ? std::to_string(ff_gain) : std::string("OFF"))
                   << std::endl;
-        std::cout << "[Config] Lead (ego-corrected ff): "
-                  << (ff_gain > 0.0f
-                          ? "ON (gain=" + std::to_string(ff_gain) + ", ego_lag=" +
-                                std::to_string(ff_ego_lag) + ", vgate=" +
-                                std::to_string(lead_vgate) + ", err_gate=" +
-                                std::to_string(lead_err_gate) + ")"
-                          : std::string("OFF"))
+        std::cout << "[Config] Predict frames: "
+                  << (predict_frames > 0.0f ? std::to_string(predict_frames) : std::string("OFF"))
                   << std::endl;
-        std::cout << "[Config] Target extrapolation: "
-                  << (predict_frames > 0.0f
-                          ? "ON (" + std::to_string(predict_frames) + " frames)"
-                          : std::string("OFF"))
-                  << std::endl;
-        std::cout << "[Config] Body-priority selection: "
-                  << (head_deprioritized != 0.0f ? "ON (head = fallback only)" : "OFF")
-                  << std::endl;
-        std::cout << "[Config] Body aim-point observation: "
-                  << (aim_h_ema > 0.0f
-                          ? "centre + smoothed height (a=" + std::to_string(aim_h_ema) + ")"
-                          : std::string("raw y1 + k*h"))
-                  << std::endl;
-        std::cout << "[Config] Vertical assist scale: " << aim_y_scale
-                  << (aim_y_scale == 1.0f ? " (full)"
-                      : aim_y_scale == 0.0f ? " (horizontal only)" : "") << std::endl;
-        std::cout << "[Config] Class-switch rejection: "
-                  << (class_switch_reject != 0.0f ? "ON" : "OFF") << std::endl;
+        std::cout << "[Config] Vertical assist scale: " << aim_y_scale << std::endl;
         std::cout << "[Config] Aim max step: " << max_step
                   << (max_step > 0.0f ? " px/frame" : " (disabled)") << std::endl;
-        std::cout << "[Config] One Euro center filter: " << (oneeuro_enabled ? "ON" : "OFF")
-                  << " (min_cutoff=" << oneeuro_min_cutoff << ", beta=" << oneeuro_beta << ")" << std::endl;
-        std::cout << "[Config] Track persistence: " << track_persistence_frames
-                  << " frame(s)"
-                  << (track_persistence_frames > 0 ? " (ON)" : " (OFF)") << std::endl;
+        std::cout << "[Config] One Euro: min_cutoff=" << oneeuro_min_cutoff
+                  << ", beta=" << oneeuro_beta << std::endl;
     }
 
 private:
@@ -284,27 +135,13 @@ private:
         aim.p_softness_y = gains.softness_y;
         aim.kd_x = gains.kd_x;
         aim.kd_y = gains.kd_y;
-        aim.distance_stickiness_factor = distance_stickiness_factor;
-        aim.track_persistence_frames = track_persistence_frames;
-        aim.inflight_comp = inflight_comp;
         aim.deadtime_frames = inflight_deadtime_frames;
         aim.ff_gain = ff_gain;
-        aim.ff_ego_lag = ff_ego_lag;
-        aim.ff_v_ema = ff_v_ema;
-        aim.lead_vgate = lead_vgate;
-        aim.lead_err_gate = lead_err_gate;
         aim.predict_frames = predict_frames;
-        aim.accel_ema = accel_ema;
-        aim.class_switch_reject = class_switch_reject;
-        aim.head_deprioritized = head_deprioritized;
-        aim.aim_h_ema = aim_h_ema;
         aim.aim_y_scale = aim_y_scale;
-        aim.fine_track_boost = fine_track_boost;
-        aim.fine_track_range = fine_track_range;
-        aim.oneeuro_enabled = oneeuro_enabled ? 1.0f : 0.0f;
+        aim.max_step = max_step;
         aim.oneeuro_min_cutoff = oneeuro_min_cutoff;
         aim.oneeuro_beta = oneeuro_beta;
-        aim.max_step = max_step;
         return aim;
     }
 };

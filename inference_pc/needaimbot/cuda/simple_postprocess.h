@@ -10,6 +10,14 @@ namespace gpa {
 // drives the adaptive cutoff, so it was tuning surface with no lever behind it.
 constexpr float kOneEuroDCutoff = 1.0f;
 
+constexpr float kInflightComp       = 1.0f;
+constexpr float kOneEuroEnabled     = 1.0f;
+constexpr float kHeadDeprioritized  = 1.0f;
+constexpr float kAimHEma            = 0.2f;
+constexpr float kFineTrackBoost     = 1.3f;
+constexpr float kFineTrackRange     = 0.5f;
+constexpr float kAccelEma           = 0.15f;
+
 struct Detection;  // Forward declaration
 
 // GPU State Structures
@@ -129,24 +137,12 @@ struct AimConfig {
     // runs higher than kd_x because the vertical axis (higher kp_y) rings more.
     float kd_x = 0.18f;
     float kd_y = 0.22f;
-    // Fine-tracking kp boost. When |error| < softness * fine_track_range,
-    // kp is scaled up by up to fine_track_boost (1.0 = no boost, 1.3 = 30%
-    // more). The boost fades linearly to 1.0 at the range boundary, so
-    // there is no discontinuity. 1.0 or fine_track_range <= 0 disables.
-    float fine_track_boost = 1.3f;
-    float fine_track_range = 0.5f;  // fraction of softness
     // Per-frame max move (output px). Caps the slew so a large error is crossed
     // in bounded smooth steps instead of one delayed leap that overshoots/rings.
     // 0 = disabled (unbounded).
     float max_step = 30.0f;
-    // Same-target stickiness when IoU fails: a box whose center is within
-    // (prev_diag * factor) of the previous target's center is treated as the
-    // same target. 0 = disabled, ~0.5 typical for fast close targets.
-    float distance_stickiness_factor = 0.5f;
-    // Track persistence: consecutive missed frames to bridge - the crosshair
-    // holds still, the target kept alive for a clean re-acquire - before
-    // dropping the target. 0 = disabled.
-    int track_persistence_frames = 5;
+    float distance_stickiness_factor = 0.4f;
+    int track_persistence_frames = 3;
 
     // HISTORY / WHY THE LEAD TERM IS BACK. An earlier velocity feedforward and a
     // coast gap-glide were removed because they rode a RAW screen-drift estimate
@@ -169,11 +165,9 @@ struct AimConfig {
     // in-flight moves have already addressed. This is what removes the
     // overshoot/ringing that dead-time causes; with it on, kp can be raised for
     // faster convergence (measured sweet spot ~0.75 at 1 frame of dead-time).
-    //   inflight_comp 0 = off (legacy behavior), 1 = full compensation.
     //   deadtime_frames must match the rig's measured emit->visible lag
     //   (bench/calibrate.py STEP-RESPONSE section). Over-estimating it
     //   over-subtracts and can destabilize, so measure before changing.
-    float inflight_comp = 0.0f;
     // FRACTIONAL frame count. The real emit->visible lag is not an integer
     // (~1.13 frames here: USB ~1ms + render wait 0..6.94ms + E2E 3.3ms @144Hz),
     // so rounding it to 1 or 2 either under- or over-compensates. A fractional w
@@ -188,26 +182,6 @@ struct AimConfig {
     // ff_gain 0 = off (pure P+D, the previous behaviour).
     // See the history note above for why this is safe now and was not before.
     float ff_gain = 0.0f;
-    // Ring lag (frames) at which our own motion between the last two
-    // measurements sits. Two consecutive detections are 1 frame apart in capture
-    // time, so this is ~dead time + 1. MIS-ALIGNING THIS IS WHAT BROKE THE
-    // EARLIER EGO ATTEMPT - keep it consistent with deadtime_frames.
-    float ff_ego_lag = 2.25f;
-    float ff_v_ema = 0.2f;      // EMA weight on the velocity estimate (0..1)
-    // Speed gate: g *= |v|/(|v|+lead_vgate). ~0 at rest, so a noisy velocity
-    // estimate cannot inject jitter into a stationary hold.
-    float lead_vgate = 9.0f;
-    // Error gate: g *= e0^2/(e0^2 + |err|^2). The lead must be OFF while
-    // acquiring - a position jump (fresh lock / target switch) produces a huge
-    // one-frame velocity that would overshoot. A real moving target instead shows
-    // SMALL error with sustained velocity. 0 = no error gating.
-    //
-    // ONE pair of gates serves BOTH lead terms (ff_gain and predict_frames).
-    // Separate per-term gates were tried and removed: they gate the same velocity
-    // against the same error, and giving each its own pair bought at most 0.5%
-    // while doubling the tuning surface. A single shared pair tuned properly
-    // beat the four-knob version outright (measured -0.8% error at equal ringing).
-    float lead_err_gate = 18.0f;
 
     // --- Symmetric dead-time compensation (target-side extrapolation) ---
     // inflight_comp removes OUR motion during the dead time. But the TARGET moved
@@ -220,65 +194,6 @@ struct AimConfig {
     // act as a tuned lead rather than a strict predictor - that is intended, the
     // gates keep it safe.
     float predict_frames = 0.0f;
-
-    // EMA weight for the acceleration estimate (0..1). Lower = smoother
-    // but slower to react to direction changes. 0 = disable acceleration
-    // prediction (pure constant-velocity). The quadratic term is
-    // 0.5 * accel * predict_frames^2, gated by the same leadGate.
-    float accel_ema = 0.15f;
-
-    // REMOVED: ego-free-frame filtering. Lifting the measurement into an ego-free
-    // frame before the One Euro update cut step overshoot -68% but made
-    // ACQUISITION 40-80% slower - fast reach and overshoot are the same mechanism,
-    // so it was a trade, not a win, and this rig's binding constraint is speed.
-    // Superseded 2026-08-01 by per-frame adaptive dead time (deadtime_adaptive in
-    // simple_main.cpp), which cuts overshoot -34% at -1.7% reach: strictly better
-    // on both axes, so the branch had no remaining use and was deleted.
-    // --- Class-switch artifact rejection ---
-    // The rig CSVs show head<->body anchor flips on 0.6-2.4% of frames, each
-    // moving the aim point 11-21px (about a third of the vertical variance). The
-    // selected classId is already known here, so those frames can be identified
-    // exactly - no inference, no threshold that could fire on noise (a magnitude
-    // gate cannot tell an anchor flip from a real fast move; the class can).
-    // On a flip: the frame contributes ZERO drift to the velocity estimate and the
-    // damping term is cleared afterwards so the artifact cannot ring on for the
-    // length of the EMA memory.
-    //   sim (80 held-out seeds, realistic noise): total error -0.9%, reversal peak
-    //   -1.5%, hold -1.2%, tracking -0.4..-1.4%, step overshoot/osc/reach UNCHANGED
-    //   - nothing regresses. 0 = off.
-    float class_switch_reject = 1.0f;
-
-    // head and body are two DIFFERENT anchors on the same enemy. Letting the
-    // nearest-to-crosshair rule alternate between them adds variance the aim
-    // cannot filter out: measured aim-point sigma was 4.22px mixed vs 4.00
-    // body-only and 3.80 head-only - the MIX is worse than either source alone.
-    // With this on, a body detection always outranks a head detection, so the aim
-    // point is produced the same way every frame. head is kept as a FALLBACK for
-    // the case that needs it (only the head visible over cover), which dropping
-    // the class outright would lose. 0 = off (pure nearest-to-crosshair).
-    // SCOPE: this orders the nearest-candidate rule only. IoU/distance
-    // stickiness still wins over it - a head that is already the tracked target
-    // stays the target even while a body is visible, because switching anchors
-    // mid-track is exactly the variance this setting exists to avoid.
-    float head_deprioritized = 1.0f;
-
-    // --- Quieter body aim point (same point, less noise) ---
-    // The aim point is y1 + k*h. Since h = y2 - y1 that is (1-k)*y1 + k*y2, so it
-    // inherits BOTH edges' noise. Measured on 400 rig frames (crop 160, screen px):
-    // the box jitter splits into a common whole-box translation (sigma ~2.5) and an
-    // independent per-edge part (sigma ~2.8), so the CENTRE - which averages the
-    // independent part down - is the quietest point on the box (3.11) while the
-    // shipped body formula sits far from it (3.49, k=0.15).
-    // Rewriting the same point as  cy + (k - 0.5)*h  is algebraically identical,
-    // but now the fast component rides on the quiet centre and h carries its own
-    // slow EMA. h is a person's box height: it changes with distance, i.e. slowly,
-    // so heavy smoothing costs almost no tracking lag.
-    //   measured: sigma_y 3.49 -> 3.12 (-10.4%) at alpha 0.2, lag bias 0.92px
-    //   (bias vs a zero-phase reference; a quarter of sigma, so it stays buried)
-    // head gains NOTHING (its k = 0.601 is already near the centre; measured +1%),
-    // so this applies to the body anchor only.
-    // 0 = off (use the raw height, i.e. the original formula exactly).
-    float aim_h_ema = 0.2f;
 
     // --- Vertical strength trim ---
     // Multiplies the whole Y output (P + D + lead). 1.0 = the controller exactly
@@ -293,8 +208,7 @@ struct AimConfig {
     // Removes detector jitter at the source: heavy smoothing when the target is
     // near-stationary (kills settle-shake), light smoothing when it moves fast
     // (no added lag on flicks). Cutoffs are in cycles/frame (sample period Te=1,
-    // frames assumed near-constant rate). oneeuro_enabled != 0 to activate.
-    float oneeuro_enabled = 1.0f;
+    // frames assumed near-constant rate).
     float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
     float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
     // NOTE: oneeuro_dcutoff was removed as a config knob. Sweeping it 0.1..5.0
@@ -328,54 +242,10 @@ struct AimConfig {
     float shoot_offset_x = 0.0f;
     float shoot_offset_y = 0.0f;
 
-    // --- Signed-Error Momentum (SEM) ---
-    // Accumulates while error sign is consistent, instant kill on sign flip.
-    // Accelerates sustained approach; brakes immediately on overshoot. All
-    // defaults are OFF (sem_enabled = 0) for backward compatibility.
-    float sem_enabled = 0.0f;     // 0=off (default OFF)
-    float sem_rate = 0.02f;       // accumulation rate per frame
-    float sem_max = 3.0f;         // max accumulated momentum (px, model-space)
-    float sem_decay = 0.95f;      // per-frame exponential decay
-
-    // --- Confidence-Gated Authority (CGA) ---
-    // Modulates the ENTIRE control output by detection confidence through a
-    // nonlinear smoothstep gate. Low-confidence detections produce smaller moves,
-    // preventing wild corrections on noisy/ambiguous detections. A speed bypass
-    // ensures MOVING targets get full authority regardless of confidence (motion
-    // blur drops confidence to ~0.4-0.5, overlapping the outlier range, so a
-    // plain confidence weight would suppress real moving-target frames - see the
-    // removed conf-weight note in pd_controller.cuh).
-    float cga_enabled = 0.0f;         // 0=off
-    float cga_conf_low = 0.4f;        // confidence below this -> gate ~0
-    float cga_conf_high = 0.8f;       // confidence above this -> gate ~1
-    float cga_speed_threshold = 3.0f;  // velocity (model px/frame) above which
-                                       // the speed bypass dominates the gate
-
-    // --- Jitter Classifier Adaptive Deadband (JCAD) ---
-    // Online classifier that detects when detections are "jittery" (high variance,
-    // low mean displacement) and widens the deadband to prevent the controller
-    // from chasing detector noise on stationary targets. When real movement is
-    // detected (mean dominates variance), the deadband narrows to the base level.
-    float jcad_enabled = 0.0f;        // 0=off
-    float jcad_alpha = 0.15f;         // EW update rate for mean/variance
-    float jcad_base_db = 0.5f;        // minimum deadband radius (model px)
-    float jcad_jitter_db = 3.0f;      // additional deadband when jittery
-    float jcad_jitter_threshold = 2.0f; // J value at which jitter_db fully active
-
-    // --- Phase-Aware Gain Scheduling (PAGS) ---
-    // Detects which phase the controller is in by tracking the HISTORY of error
-    // sign changes, NOT just the error magnitude. ACQUIRE (large error, sign
-    // consistent): slightly boosted gains for fast reach. TRACK (small error,
-    // stable): baseline. OSCILLATE (sign alternating rapidly): reduced gains,
-    // increased damping. This is distinct from the nonlinear P gain (which only
-    // sees current error magnitude): PAGS detects and responds to the temporal
-    // PATTERN of sign reversals that characterize ringing.
-    float pags_enabled = 0.0f;            // 0=off
-    float pags_acquire_threshold = 15.0f; // error (model px) above = ACQUIRE
-    float pags_osc_threshold = 0.5f;      // sign-flip rate above = OSCILLATE
-    float pags_acquire_mult = 1.1f;       // gain multiplier in ACQUIRE
-    float pags_osc_mult = 0.6f;           // gain multiplier in OSCILLATE
-    float pags_alpha = 0.2f;              // EW rate for sign-flip tracking
+    float sem_enabled = 0.0f;
+    float cga_enabled = 0.0f;
+    float jcad_enabled = 0.0f;
+    float pags_enabled = 0.0f;
 };
 
 struct MouseMovement {

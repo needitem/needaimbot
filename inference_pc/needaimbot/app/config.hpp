@@ -63,8 +63,6 @@ inline void rescaleAimConfigForRate(gpa::AimConfig& c, double r) {
     c.kp_x *= fr;
     c.kp_y *= fr;
     c.max_step *= fr;
-    c.lead_vgate *= fr;
-    c.ff_v_ema = std::clamp(c.ff_v_ema * fr, 0.0f, 1.0f);
     c.oneeuro_min_cutoff *= fr;
     c.predict_frames /= fr;
     c.ff_gain /= fr;
