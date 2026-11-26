@@ -116,9 +116,9 @@ class AimConfig:
 # ---------------------------------------------------------------------------
 # Hardcoded constants (mirrors pd_controller.cuh)
 # ---------------------------------------------------------------------------
-K_LEAD_VGATE = 5.82
+K_LEAD_VGATE = 5.52
 K_LEAD_ERR_GATE = 22.25
-K_FF_V_EMA = 0.097
+K_FF_V_EMA = 0.126
 K_FF_EGO_LAG = 2.85
 K_ACCEL_EMA = 0.15
 K_FINE_TRACK_BOOST = 1.3
@@ -139,9 +139,9 @@ K_PAGS_ACQUIRE_MULT = 1.1
 K_PAGS_OSC_MULT = 0.4
 K_PAGS_ALPHA = 0.2
 # Adaptive kp: error-magnitude-dependent gain scaling
-K_ADAPTIVE_KP_LARGE_THRESHOLD = 26.67
-K_ADAPTIVE_KP_SMALL_THRESHOLD = 1.79
-K_ADAPTIVE_KP_LARGE_MULT = 1.28
+K_ADAPTIVE_KP_LARGE_THRESHOLD = 24.50
+K_ADAPTIVE_KP_SMALL_THRESHOLD = 1.51
+K_ADAPTIVE_KP_LARGE_MULT = 1.19
 K_ADAPTIVE_KP_SMALL_MULT = 0.97
 
 K_DERIV_ALPHA = (2.0 * math.pi) / (2.0 * math.pi + 1.0)
@@ -215,7 +215,7 @@ def inflight_at(s: AimState, lag: float):
         ay = (1.0 - frac) * ay + frac * s.inflight_y[j]
     return ax, ay
 
-def lead_gate(s: AimState, error_x: float, error_y: float, lead_vgate: float = 5.82) -> float:
+def lead_gate(s: AimState, error_x: float, error_y: float, lead_vgate: float = 5.52) -> float:
     g = 1.0
     sp = math.sqrt(s.vel_x**2 + s.vel_y**2)
     g *= sp / (sp + lead_vgate)
