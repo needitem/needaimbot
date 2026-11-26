@@ -13,9 +13,9 @@ namespace gpa {
 // --- Hardcoded internal constants (tuned, not user-configurable) ---
 // kHeadDeprioritized and kAimHEma are in simple_postprocess.h (used by both files).
 // Lead term gates
-__device__ constexpr float kLeadVgate       = 5.82f;
+__device__ constexpr float kLeadVgate       = 5.52f;
 __device__ constexpr float kLeadErrGate     = 22.25f;
-__device__ constexpr float kFfVEma          = 0.097f;
+__device__ constexpr float kFfVEma          = 0.126f;
 __device__ constexpr float kFfEgoLag        = 2.85f;
 // SEM internals
 __device__ constexpr float kSemRate         = 0.01f;
@@ -37,9 +37,9 @@ __device__ constexpr float kPagsAcquireMult  = 1.1f;
 __device__ constexpr float kPagsOscMult      = 0.4f;
 __device__ constexpr float kPagsAlpha        = 0.2f;
 // Adaptive kp: error-magnitude-dependent gain scaling
-__device__ constexpr float kAdaptiveKpLargeThreshold = 26.67f;
-__device__ constexpr float kAdaptiveKpSmallThreshold = 1.79f;
-__device__ constexpr float kAdaptiveKpLargeMult = 1.28f;
+__device__ constexpr float kAdaptiveKpLargeThreshold = 24.50f;
+__device__ constexpr float kAdaptiveKpSmallThreshold = 1.51f;
+__device__ constexpr float kAdaptiveKpLargeMult = 1.19f;
 __device__ constexpr float kAdaptiveKpSmallMult = 0.97f;
 
 // alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).

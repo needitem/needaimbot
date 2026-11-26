@@ -23,16 +23,16 @@ struct Gains {
 
 class Settings {
 public:
-    Gains right{0.712f, 0.394f, 2.08f, 9.42f, 0.004f, 0.006f};
+    Gains right{0.638f, 0.447f, 1.66f, 11.50f, 0.0025f, 0.005f};
     Gains thumb{0.709f, 0.408f, 4.66f, 9.77f, 0.02f, 0.082f};
 
-    float inflight_deadtime_frames = 3.97f;
-    float ff_gain = 0.612f;
-    float predict_frames = 5.78f;
+    float inflight_deadtime_frames = 3.98f;
+    float ff_gain = 0.653f;
+    float predict_frames = 5.84f;
     float aim_y_scale = 1.0f;
-    float max_step = 9.71f;
-    float oneeuro_min_cutoff = 0.039f;
-    float oneeuro_beta = 0.009f;
+    float max_step = 9.92f;
+    float oneeuro_min_cutoff = 0.034f;
+    float oneeuro_beta = 0.008f;
 
     // IoU stickiness threshold is passed separately to the kernel.
     static constexpr float kIouStickinessThreshold = 0.3f;

@@ -82,22 +82,22 @@ class AimState:
 
 @dataclass
 class AimConfig:
-    kp_x: float = 0.712
-    kp_y: float = 0.394
-    p_softness_x: float = 2.08
-    p_softness_y: float = 9.42
-    kd_x: float = 0.004
-    kd_y: float = 0.006
+    kp_x: float = 0.638
+    kp_y: float = 0.447
+    p_softness_x: float = 1.66
+    p_softness_y: float = 11.50
+    kd_x: float = 0.0025
+    kd_y: float = 0.005
     fine_track_boost: float = 1.3
     fine_track_range: float = 0.5
-    max_step: float = 9.71
-    deadtime_frames: float = 3.97
-    ff_gain: float = 0.612
+    max_step: float = 9.92
+    deadtime_frames: float = 3.98
+    ff_gain: float = 0.653
     ff_ego_lag: float = 2.85
-    predict_frames: float = 5.78
+    predict_frames: float = 5.84
     oneeuro_enabled: float = 1.0
-    oneeuro_min_cutoff: float = 0.039
-    oneeuro_beta: float = 0.009
+    oneeuro_min_cutoff: float = 0.034
+    oneeuro_beta: float = 0.008
     aim_output_enabled: float = 1.0
     shoot_offset_x: float = 0.0
     shoot_offset_y: float = 0.0
@@ -106,11 +106,11 @@ class AimConfig:
     cga_enabled: float = 0.0
     jcad_enabled: float = 1.0
     pags_enabled: float = 1.0
-    ff_v_ema: float = 0.097
-    lead_vgate: float = 5.82
-    akp_large_thresh: float = 26.67
-    akp_small_thresh: float = 1.79
-    akp_large_mult: float = 1.28
+    ff_v_ema: float = 0.126
+    lead_vgate: float = 5.52
+    akp_large_thresh: float = 24.50
+    akp_small_thresh: float = 1.51
+    akp_large_mult: float = 1.19
     akp_small_mult: float = 0.97
 
 # ---------------------------------------------------------------------------
