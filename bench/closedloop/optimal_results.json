@@ -1,0 +1,190 @@
+{
+  "parameters": {
+    "oneeuro_min_cutoff": 0.08,
+    "oneeuro_beta": 0.001,
+    "sem_rate": 0.01,
+    "sem_decay": 0.97,
+    "pags_osc_mult": 0.4,
+    "pags_osc_threshold": 0.4,
+    "deadtime_frames": 0.5,
+    "ff_gain": 0.5,
+    "predict_frames": 1.5,
+    "ff_v_ema": 0.05,
+    "adaptive_kp_large_threshold": 15.0,
+    "adaptive_kp_small_threshold": 4.0,
+    "adaptive_kp_large_mult": 1.3,
+    "adaptive_kp_small_mult": 0.7
+  },
+  "results": {
+    "stationary|baseline": {
+      "trajectory": "stationary",
+      "config": "baseline",
+      "mae": 1.395,
+      "rms": 1.606,
+      "p95": 2.727,
+      "settle": 9.4,
+      "oscillation": 29.0
+    },
+    "stationary|sem_pags": {
+      "trajectory": "stationary",
+      "config": "sem_pags",
+      "mae": 1.519,
+      "rms": 1.746,
+      "p95": 3.097,
+      "settle": 9.2,
+      "oscillation": 27.4
+    },
+    "stationary|optimal": {
+      "trajectory": "stationary",
+      "config": "optimal",
+      "mae": 1.415,
+      "rms": 1.652,
+      "p95": 3.063,
+      "settle": 5.6,
+      "oscillation": 23.8
+    },
+    "slow_strafe|baseline": {
+      "trajectory": "slow_strafe",
+      "config": "baseline",
+      "mae": 5.715,
+      "rms": 5.961,
+      "p95": 8.452,
+      "settle": 300.0,
+      "oscillation": 18.6
+    },
+    "slow_strafe|sem_pags": {
+      "trajectory": "slow_strafe",
+      "config": "sem_pags",
+      "mae": 3.788,
+      "rms": 4.28,
+      "p95": 7.414,
+      "settle": 84.4,
+      "oscillation": 30.0
+    },
+    "slow_strafe|optimal": {
+      "trajectory": "slow_strafe",
+      "config": "optimal",
+      "mae": 3.749,
+      "rms": 4.229,
+      "p95": 7.258,
+      "settle": 196.2,
+      "oscillation": 29.2
+    },
+    "fast_strafe|baseline": {
+      "trajectory": "fast_strafe",
+      "config": "baseline",
+      "mae": 10.443,
+      "rms": 10.85,
+      "p95": 15.669,
+      "settle": 300.0,
+      "oscillation": 16.6
+    },
+    "fast_strafe|sem_pags": {
+      "trajectory": "fast_strafe",
+      "config": "sem_pags",
+      "mae": 4.769,
+      "rms": 6.218,
+      "p95": 12.849,
+      "settle": 237.0,
+      "oscillation": 42.4
+    },
+    "fast_strafe|optimal": {
+      "trajectory": "fast_strafe",
+      "config": "optimal",
+      "mae": 4.693,
+      "rms": 6.045,
+      "p95": 12.815,
+      "settle": 190.2,
+      "oscillation": 44.8
+    },
+    "sine_wave|baseline": {
+      "trajectory": "sine_wave",
+      "config": "baseline",
+      "mae": 2.334,
+      "rms": 2.607,
+      "p95": 4.487,
+      "settle": 29.4,
+      "oscillation": 32.6
+    },
+    "sine_wave|sem_pags": {
+      "trajectory": "sine_wave",
+      "config": "sem_pags",
+      "mae": 2.357,
+      "rms": 2.627,
+      "p95": 4.425,
+      "settle": 47.6,
+      "oscillation": 34.6
+    },
+    "sine_wave|optimal": {
+      "trajectory": "sine_wave",
+      "config": "optimal",
+      "mae": 2.427,
+      "rms": 2.693,
+      "p95": 4.473,
+      "settle": 54.0,
+      "oscillation": 31.4
+    },
+    "diagonal|baseline": {
+      "trajectory": "diagonal",
+      "config": "baseline",
+      "mae": 9.4,
+      "rms": 9.655,
+      "p95": 12.974,
+      "settle": 300.0,
+      "oscillation": 4.4
+    },
+    "diagonal|sem_pags": {
+      "trajectory": "diagonal",
+      "config": "sem_pags",
+      "mae": 4.434,
+      "rms": 5.184,
+      "p95": 9.151,
+      "settle": 254.8,
+      "oscillation": 45.6
+    },
+    "diagonal|optimal": {
+      "trajectory": "diagonal",
+      "config": "optimal",
+      "mae": 4.411,
+      "rms": 5.161,
+      "p95": 9.118,
+      "settle": 254.6,
+      "oscillation": 45.6
+    },
+    "step_response|baseline": {
+      "trajectory": "step_response",
+      "config": "baseline",
+      "mae": 1.941,
+      "rms": 4.016,
+      "p95": 3.603,
+      "settle": 14.0,
+      "oscillation": 29.4
+    },
+    "step_response|sem_pags": {
+      "trajectory": "step_response",
+      "config": "sem_pags",
+      "mae": 2.108,
+      "rms": 4.214,
+      "p95": 3.611,
+      "settle": 9.2,
+      "oscillation": 27.8
+    },
+    "step_response|optimal": {
+      "trajectory": "step_response",
+      "config": "optimal",
+      "mae": 2.009,
+      "rms": 4.127,
+      "p95": 3.635,
+      "settle": 5.6,
+      "oscillation": 24.4
+    }
+  },
+  "summary": {
+    "stationary_mae": 1.415,
+    "moving_mae": 3.82,
+    "overall_mae": 3.1173333333333333,
+    "baseline_overall_mae": 5.204666666666666,
+    "sem_pags_overall_mae": 3.1625,
+    "all_criteria_met": true
+  }
+}

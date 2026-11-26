@@ -82,13 +82,13 @@ class AimConfig:
     fine_track_range: float = 0.5
     max_step: float = 30.0
     inflight_comp: float = 0.75
-    deadtime_frames: float = 1.13
-    ff_gain: float = 0.0
+    deadtime_frames: float = 0.5
+    ff_gain: float = 0.5
     ff_ego_lag: float = 2.25
-    predict_frames: float = 0.0
+    predict_frames: float = 1.5
     oneeuro_enabled: float = 1.0
-    oneeuro_min_cutoff: float = 0.1
-    oneeuro_beta: float = 0.02
+    oneeuro_min_cutoff: float = 0.08
+    oneeuro_beta: float = 0.001
     aim_output_enabled: float = 1.0
     shoot_offset_x: float = 0.0
     shoot_offset_y: float = 0.0
@@ -103,14 +103,14 @@ class AimConfig:
 # ---------------------------------------------------------------------------
 K_LEAD_VGATE = 8.6
 K_LEAD_ERR_GATE = 22.25
-K_FF_V_EMA = 0.137
+K_FF_V_EMA = 0.05
 K_FF_EGO_LAG = 2.85
 K_ACCEL_EMA = 0.15
 K_FINE_TRACK_BOOST = 1.3
 K_FINE_TRACK_RANGE = 0.5
-K_SEM_RATE = 0.02
+K_SEM_RATE = 0.01
 K_SEM_MAX = 3.0
-K_SEM_DECAY = 0.95
+K_SEM_DECAY = 0.97
 K_CGA_CONF_LOW = 0.4
 K_CGA_CONF_HIGH = 0.8
 K_CGA_SPEED_THRESHOLD = 3.0
@@ -119,9 +119,9 @@ K_JCAD_BASE_DB = 0.5
 K_JCAD_JITTER_DB = 3.0
 K_JCAD_JITTER_THRESHOLD = 2.0
 K_PAGS_ACQUIRE_THRESHOLD = 15.0
-K_PAGS_OSC_THRESHOLD = 0.5
+K_PAGS_OSC_THRESHOLD = 0.4
 K_PAGS_ACQUIRE_MULT = 1.1
-K_PAGS_OSC_MULT = 0.6
+K_PAGS_OSC_MULT = 0.4
 K_PAGS_ALPHA = 0.2
 
 K_DERIV_ALPHA = (2.0 * math.pi) / (2.0 * math.pi + 1.0)
@@ -542,7 +542,7 @@ TRAJECTORIES = {
 # ---------------------------------------------------------------------------
 def config_baseline():
     """PD + One Euro + dead-time comp (no novel algorithms)."""
-    return AimConfig(inflight_comp=0.75, deadtime_frames=1.13)
+    return AimConfig(inflight_comp=0.75)
 
 def config_sem_pags():
     """Baseline + SEM + PAGS (best-value from synthetic benchmark)."""
@@ -561,10 +561,8 @@ def config_all_novel():
     return c
 
 def config_with_lead():
-    """Baseline + lead terms (ff_gain + predict_frames)."""
+    """Baseline + lead terms (ff_gain + predict_frames) - uses defaults."""
     c = config_baseline()
-    c.ff_gain = 0.5
-    c.predict_frames = 1.0
     return c
 
 CONFIGS = {

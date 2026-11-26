@@ -173,7 +173,7 @@ struct AimConfig {
     // so rounding it to 1 or 2 either under- or over-compensates. A fractional w
     // subtracts the whole last emit plus frac*(the one before it).
     // 1.0 == the old integer deadtime_frames=1 behaviour, exactly.
-    float deadtime_frames = 1.0f;
+    float deadtime_frames = 0.5f;
 
     // --- Lead / feedforward on the EGO-CORRECTED target velocity ---
     // Cancels the nonlinear-P controller's steady-state ramp lag against a moving
@@ -181,7 +181,7 @@ struct AimConfig {
     // tuning can remove because it is structural to a proportional law.
     // ff_gain 0 = off (pure P+D, the previous behaviour).
     // See the history note above for why this is safe now and was not before.
-    float ff_gain = 0.0f;
+    float ff_gain = 0.5f;
 
     // --- Symmetric dead-time compensation (target-side extrapolation) ---
     // inflight_comp removes OUR motion during the dead time. But the TARGET moved
@@ -193,7 +193,7 @@ struct AimConfig {
     // either alone. predict_frames 0 = off. Values above the physical dead time
     // act as a tuned lead rather than a strict predictor - that is intended, the
     // gates keep it safe.
-    float predict_frames = 0.0f;
+    float predict_frames = 1.5f;
 
     // --- Vertical strength trim ---
     // Multiplies the whole Y output (P + D + lead). 1.0 = the controller exactly
@@ -209,8 +209,8 @@ struct AimConfig {
     // near-stationary (kills settle-shake), light smoothing when it moves fast
     // (no added lag on flicks). Cutoffs are in cycles/frame (sample period Te=1,
     // frames assumed near-constant rate).
-    float oneeuro_min_cutoff = 0.1f; // base cutoff at rest (lower = smoother/more lag)
-    float oneeuro_beta = 0.02f;      // speed coefficient (higher = less lag when fast)
+    float oneeuro_min_cutoff = 0.08f; // base cutoff at rest (lower = smoother/more lag)
+    float oneeuro_beta = 0.001f;      // speed coefficient (higher = less lag when fast)
     // NOTE: oneeuro_dcutoff was removed as a config knob. Sweeping it 0.1..5.0
     // moves total error by less than 0.2% (it only shapes the derivative used for
     // the adaptive cutoff), so it was pure tuning surface with no lever behind it.

@@ -15,12 +15,12 @@ namespace gpa {
 // Lead term gates
 __device__ constexpr float kLeadVgate       = 8.6f;
 __device__ constexpr float kLeadErrGate     = 22.25f;
-__device__ constexpr float kFfVEma          = 0.137f;
+__device__ constexpr float kFfVEma          = 0.05f;
 __device__ constexpr float kFfEgoLag        = 2.85f;
 // SEM internals
-__device__ constexpr float kSemRate         = 0.02f;
+__device__ constexpr float kSemRate         = 0.01f;
 __device__ constexpr float kSemMax          = 3.0f;
-__device__ constexpr float kSemDecay        = 0.95f;
+__device__ constexpr float kSemDecay        = 0.97f;
 // CGA internals
 __device__ constexpr float kCgaConfLow      = 0.4f;
 __device__ constexpr float kCgaConfHigh     = 0.8f;
@@ -32,10 +32,15 @@ __device__ constexpr float kJcadJitterDb    = 3.0f;
 __device__ constexpr float kJcadJitterThreshold = 2.0f;
 // PAGS internals
 __device__ constexpr float kPagsAcquireThreshold = 15.0f;
-__device__ constexpr float kPagsOscThreshold = 0.5f;
+__device__ constexpr float kPagsOscThreshold = 0.4f;
 __device__ constexpr float kPagsAcquireMult  = 1.1f;
-__device__ constexpr float kPagsOscMult      = 0.6f;
+__device__ constexpr float kPagsOscMult      = 0.4f;
 __device__ constexpr float kPagsAlpha        = 0.2f;
+// Adaptive kp: error-magnitude-dependent gain scaling
+__device__ constexpr float kAdaptiveKpLargeThreshold = 15.0f;
+__device__ constexpr float kAdaptiveKpSmallThreshold = 4.0f;
+__device__ constexpr float kAdaptiveKpLargeMult = 1.3f;
+__device__ constexpr float kAdaptiveKpSmallMult = 0.7f;
 
 // alpha = 1 / (1 + tau/Te), tau = 1 / (2*pi*cutoff).
 __device__ __forceinline__ float oneEuroAlpha(float cutoff) {
@@ -481,12 +486,23 @@ __device__ __forceinline__ void computeAimMovement(
         ff_y = aim_config.ff_gain * g * aim_state->vel_y;
     }
 
+    // Adaptive kp: scale gain based on error magnitude.
+    // Large errors (>15px): boost gain for faster acquisition.
+    // Small errors (<4px): reduce gain to minimize jitter response.
+    const float err_mag_kp = sqrtf(error_x * error_x + error_y * error_y);
+    float kp_scale = 1.0f;
+    if (err_mag_kp > kAdaptiveKpLargeThreshold) {
+        kp_scale = kAdaptiveKpLargeMult;
+    } else if (err_mag_kp < kAdaptiveKpSmallThreshold) {
+        kp_scale = kAdaptiveKpSmallMult;
+    }
+
     float movement_x =
-        (nonlinearPMove(error_x, aim_config.kp_x, aim_config.p_softness_x,
+        (nonlinearPMove(error_x, aim_config.kp_x * kp_scale, aim_config.p_softness_x,
                         kFineTrackBoost, kFineTrackRange)
          + aim_config.kd_x * aim_state->derr_x + ff_x) * movement_scale_x;
     float movement_y =
-        (nonlinearPMove(error_y, aim_config.kp_y, aim_config.p_softness_y,
+        (nonlinearPMove(error_y, aim_config.kp_y * kp_scale, aim_config.p_softness_y,
                         kFineTrackBoost, kFineTrackRange)
          + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
