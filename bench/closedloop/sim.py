@@ -2,19 +2,22 @@
 """Closed-loop FPS aimbot simulation with ego-pollution, realistic noise,
 and the actual PD controller math from pd_controller.cuh.
 
+All default parameters match the production runtime (simple_config.json)
+so simulation results are directly comparable to real-system behaviour.
+
 The simulation models the full chain:
   1. World-space target follows a trajectory
   2. FPS camera transforms world→screen (ego-pollution: mouse output shifts ALL screen coords)
   3. Detector produces noisy bounding box with confidence
-  4. Controller computes mouse delta (PD + One Euro + dead-time comp + SEM/CGA/JCAD/PAGS)
+  4. Controller computes mouse delta (PD + One Euro + dead-time comp + adaptive kp + SEM/CGA/JCAD/PAGS)
   5. Mouse delta feeds back into camera → next frame
 
 Noise sources:
-  - Detection jitter (Gaussian, calibrated from rig CSVs: σ≈3.5px at 320×320)
-  - Confidence variation (beta distribution, mean≈0.72, σ≈0.12)
+  - Detection jitter (Gaussian, calibrated from rig CSVs: σ≈1.75px at 160×160)
+  - Confidence variation (Gaussian, mean≈0.72, σ≈0.12)
   - Missed detections (3% drop rate, up to 2 consecutive)
-  - Class flips (head↔body, 1.5% per frame, 15px vertical offset)
-  - Frame timing jitter (±0.5ms around 6.9ms period ≈ 144Hz)
+  - Class flips (head↔body, 1.5% per frame, 7.5px vertical offset at 160×160)
+  - Pipeline dead-time: 3 frames (ceil of 2.85 deadtime_frames)
 """
 
 import math
@@ -72,23 +75,22 @@ class AimState:
 
 @dataclass
 class AimConfig:
-    kp_x: float = 0.55
-    kp_y: float = 0.6
-    p_softness_x: float = 11.0
-    p_softness_y: float = 10.0
-    kd_x: float = 0.18
-    kd_y: float = 0.22
+    kp_x: float = 0.765
+    kp_y: float = 0.698
+    p_softness_x: float = 8.6
+    p_softness_y: float = 13.14
+    kd_x: float = 0.052
+    kd_y: float = 0.037
     fine_track_boost: float = 1.3
     fine_track_range: float = 0.5
-    max_step: float = 30.0
-    inflight_comp: float = 0.75
-    deadtime_frames: float = 0.5
-    ff_gain: float = 0.5
-    ff_ego_lag: float = 2.25
-    predict_frames: float = 1.5
+    max_step: float = 19.56
+    deadtime_frames: float = 2.85
+    ff_gain: float = 1.7
+    ff_ego_lag: float = 2.85
+    predict_frames: float = 3.18
     oneeuro_enabled: float = 1.0
-    oneeuro_min_cutoff: float = 0.08
-    oneeuro_beta: float = 0.001
+    oneeuro_min_cutoff: float = 0.084
+    oneeuro_beta: float = 0.02
     aim_output_enabled: float = 1.0
     shoot_offset_x: float = 0.0
     shoot_offset_y: float = 0.0
@@ -101,9 +103,9 @@ class AimConfig:
 # ---------------------------------------------------------------------------
 # Hardcoded constants (mirrors pd_controller.cuh)
 # ---------------------------------------------------------------------------
-K_LEAD_VGATE = 8.6
+K_LEAD_VGATE = 14.79
 K_LEAD_ERR_GATE = 22.25
-K_FF_V_EMA = 0.05
+K_FF_V_EMA = 0.235
 K_FF_EGO_LAG = 2.85
 K_ACCEL_EMA = 0.15
 K_FINE_TRACK_BOOST = 1.3
@@ -123,6 +125,11 @@ K_PAGS_OSC_THRESHOLD = 0.4
 K_PAGS_ACQUIRE_MULT = 1.1
 K_PAGS_OSC_MULT = 0.4
 K_PAGS_ALPHA = 0.2
+# Adaptive kp: error-magnitude-dependent gain scaling
+K_ADAPTIVE_KP_LARGE_THRESHOLD = 15.0
+K_ADAPTIVE_KP_SMALL_THRESHOLD = 4.0
+K_ADAPTIVE_KP_LARGE_MULT = 1.3
+K_ADAPTIVE_KP_SMALL_MULT = 0.7
 
 K_DERIV_ALPHA = (2.0 * math.pi) / (2.0 * math.pi + 1.0)
 
@@ -249,7 +256,7 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
     s.prev_class = target_class
 
     inf_x, inf_y = 0.0, 0.0
-    use_comp = (cfg.inflight_comp > 0 and cfg.deadtime_frames > 0)
+    use_comp = (cfg.deadtime_frames > 0)
     if use_comp:
         inf_x, inf_y = inflight_sum(s, cfg.deadtime_frames)
 
@@ -330,9 +337,9 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
 
     if use_comp:
         if scale_x != 0:
-            error_x -= cfg.inflight_comp * inf_x / scale_x
+            error_x -= inf_x / scale_x
         if scale_y != 0:
-            error_y -= cfg.inflight_comp * inf_y / scale_y
+            error_y -= inf_y / scale_y
 
     # JCAD deadband
     if cfg.jcad_enabled != 0.0:
@@ -370,10 +377,18 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
         ff_x = cfg.ff_gain * g * s.vel_x
         ff_y = cfg.ff_gain * g * s.vel_y
 
-    movement_x = (nonlinear_p_move(error_x, cfg.kp_x, cfg.p_softness_x,
+    # Adaptive kp: scale gain based on error magnitude
+    err_mag_kp = math.sqrt(error_x**2 + error_y**2)
+    kp_scale = 1.0
+    if err_mag_kp > K_ADAPTIVE_KP_LARGE_THRESHOLD:
+        kp_scale = K_ADAPTIVE_KP_LARGE_MULT
+    elif err_mag_kp < K_ADAPTIVE_KP_SMALL_THRESHOLD:
+        kp_scale = K_ADAPTIVE_KP_SMALL_MULT
+
+    movement_x = (nonlinear_p_move(error_x, cfg.kp_x * kp_scale, cfg.p_softness_x,
                                     K_FINE_TRACK_BOOST, K_FINE_TRACK_RANGE)
                   + cfg.kd_x * s.derr_x + ff_x) * scale_x
-    movement_y = (nonlinear_p_move(error_y, cfg.kp_y, cfg.p_softness_y,
+    movement_y = (nonlinear_p_move(error_y, cfg.kp_y * kp_scale, cfg.p_softness_y,
                                     K_FINE_TRACK_BOOST, K_FINE_TRACK_RANGE)
                   + cfg.kd_y * s.derr_y + ff_y) * scale_y
 
@@ -452,13 +467,13 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
 class NoiseModel:
     def __init__(self, seed=42):
         self.rng = random.Random(seed)
-        self.det_sigma = 3.5       # detection jitter σ in model px (320×320)
+        self.det_sigma = 1.75      # detection jitter σ in model px (160×160)
         self.conf_mean = 0.72
         self.conf_std = 0.12
         self.miss_rate = 0.03
         self.max_consec_miss = 2
         self.class_flip_rate = 0.015
-        self.class_flip_offset_y = 15.0  # px offset on head↔body flip
+        self.class_flip_offset_y = 7.5   # px offset on head↔body flip (160×160)
         self.consec_misses = 0
 
     def jitter(self):
@@ -492,7 +507,7 @@ class FPSCamera:
     yaw: float = 0.0    # horizontal angle (degrees)
     pitch: float = 0.0  # vertical angle (degrees)
     sensitivity: float = 0.022  # degrees per mouse pixel (typical FPS @ 800 DPI)
-    model_size: int = 320
+    model_size: int = 160
 
     def apply_mouse(self, dx: int, dy: int):
         self.yaw += dx * self.sensitivity
@@ -542,7 +557,7 @@ TRAJECTORIES = {
 # ---------------------------------------------------------------------------
 def config_baseline():
     """PD + One Euro + dead-time comp (no novel algorithms)."""
-    return AimConfig(inflight_comp=0.75)
+    return AimConfig()
 
 def config_sem_pags():
     """Baseline + SEM + PAGS (best-value from synthetic benchmark)."""
@@ -620,7 +635,7 @@ class SimResult:
         return self.sign_flips_x + self.sign_flips_y
 
 def run_sim(traj_name: str, config_name: str, seed: int = 42,
-            n_frames: int = 300, deadtime_delay: int = 1) -> SimResult:
+            n_frames: int = 300, deadtime_delay: int = 3) -> SimResult:
     cfg = CONFIGS[config_name]()
     state = AimState()
     camera = FPSCamera()
@@ -628,7 +643,7 @@ def run_sim(traj_name: str, config_name: str, seed: int = 42,
     traj_fn = TRAJECTORIES[traj_name]
     result = SimResult(traj_name, config_name, seed, n_frames)
 
-    model_size = 320
+    model_size = 160
     screen_cx = model_size / 2.0
     screen_cy = model_size / 2.0
     scale_x = 1.0
@@ -713,9 +728,9 @@ def main():
 
     print(f"Closed-Loop FPS Aimbot Simulation")
     print(f"{'='*72}")
-    print(f"Frames: {n_frames} | Seeds: {len(seeds)} | Dead-time: 1 frame")
-    print(f"Noise: det_σ=3.5px, miss=3%, class_flip=1.5%")
-    print(f"Camera: 0.022°/px sensitivity, ego-pollution ON")
+    print(f"Frames: {n_frames} | Seeds: {len(seeds)} | Dead-time: 3 frames (2.85)")
+    print(f"Noise: det_σ=1.75px @160×160, miss=3%, class_flip=1.5%")
+    print(f"Camera: 0.022°/px sensitivity, ego-pollution ON, adaptive kp ON")
     print()
 
     header = f"{'Trajectory':<16} {'Config':<14} {'MAE':>7} {'RMS':>7} {'P95':>7} {'Settle':>7} {'Osc':>5} {'Miss':>5}"
