@@ -106,6 +106,12 @@ class AimConfig:
     cga_enabled: float = 0.0
     jcad_enabled: float = 1.0
     pags_enabled: float = 1.0
+    ff_v_ema: float = 0.097
+    lead_vgate: float = 5.82
+    akp_large_thresh: float = 26.67
+    akp_small_thresh: float = 1.79
+    akp_large_mult: float = 1.28
+    akp_small_mult: float = 0.97
 
 # ---------------------------------------------------------------------------
 # Hardcoded constants (mirrors pd_controller.cuh)
@@ -209,10 +215,10 @@ def inflight_at(s: AimState, lag: float):
         ay = (1.0 - frac) * ay + frac * s.inflight_y[j]
     return ax, ay
 
-def lead_gate(s: AimState, error_x: float, error_y: float) -> float:
+def lead_gate(s: AimState, error_x: float, error_y: float, lead_vgate: float = 5.82) -> float:
     g = 1.0
     sp = math.sqrt(s.vel_x**2 + s.vel_y**2)
-    g *= sp / (sp + K_LEAD_VGATE)
+    g *= sp / (sp + lead_vgate)
     e0 = K_LEAD_ERR_GATE
     e2 = error_x**2 + error_y**2
     g *= (e0*e0) / (e0*e0 + e2)
@@ -329,7 +335,7 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
             dvy = (med_y - s.prev_raw_y) + (ay_v / scale_y if scale_y != 0 else 0)
             dvx = min(max(dvx, -max_drift), max_drift)
             dvy = min(max(dvy, -max_drift), max_drift)
-            a = K_FF_V_EMA
+            a = cfg.ff_v_ema
             s.vel_x = (1-a) * s.vel_x + a * dvx
             s.vel_y = (1-a) * s.vel_y + a * dvy
         else:
@@ -372,7 +378,7 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
 
     # predict_frames setpoint shift
     if cfg.predict_frames > 0:
-        g = lead_gate(s, error_x, error_y)
+        g = lead_gate(s, error_x, error_y, cfg.lead_vgate)
         t = cfg.predict_frames
         error_x += g * (t * s.vel_x + 0.5*t*t*s.accel_x)
         error_y += g * (t * s.vel_y + 0.5*t*t*s.accel_y)
@@ -392,17 +398,17 @@ def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
     # ff output term
     ff_x, ff_y = 0.0, 0.0
     if cfg.ff_gain > 0:
-        g = lead_gate(s, error_x, error_y)
+        g = lead_gate(s, error_x, error_y, cfg.lead_vgate)
         ff_x = cfg.ff_gain * g * s.vel_x
         ff_y = cfg.ff_gain * g * s.vel_y
 
     # Adaptive kp: scale gain based on error magnitude
     err_mag_kp = math.sqrt(error_x**2 + error_y**2)
     kp_scale = 1.0
-    if err_mag_kp > K_ADAPTIVE_KP_LARGE_THRESHOLD:
-        kp_scale = K_ADAPTIVE_KP_LARGE_MULT
-    elif err_mag_kp < K_ADAPTIVE_KP_SMALL_THRESHOLD:
-        kp_scale = K_ADAPTIVE_KP_SMALL_MULT
+    if err_mag_kp > cfg.akp_large_thresh:
+        kp_scale = cfg.akp_large_mult
+    elif err_mag_kp < cfg.akp_small_thresh:
+        kp_scale = cfg.akp_small_mult
 
     movement_x = (nonlinear_p_move(error_x, cfg.kp_x * kp_scale, cfg.p_softness_x,
                                     K_FINE_TRACK_BOOST, K_FINE_TRACK_RANGE)
