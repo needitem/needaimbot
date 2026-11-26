@@ -738,7 +738,8 @@ __global__ void stage2FinalizeKernel(
     int emit_dx = 0, emit_dy = 0;
     computeAimMovement(raw_center_x, raw_center_y, screen_center_x, screen_center_y,
                         movement_scale_x, movement_scale_y, aim_config, d_aim_state,
-                        chosenTarget.classId, emit_dx, emit_dy);
+                        chosenTarget.classId, chosenTarget.confidence,
+                        emit_dx, emit_dy);
 
     d_inference_result->movement.dx = emit_dx;
     d_inference_result->movement.dy = emit_dy;

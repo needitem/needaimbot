@@ -103,6 +103,29 @@ struct AimState {
     float med_raw_x[2] = {0.0f, 0.0f};  // [0]=t-2, [1]=t-1
     float med_raw_y[2] = {0.0f, 0.0f};
     int   med_initialized = 0;           // 0 until 2 samples collected
+
+    // --- Signed-Error Momentum (SEM) state ---
+    // Accumulates while error sign is consistent; instant kill on sign flip
+    // (overshoot detected). Unlike an integral: no windup, no sign-agnostic
+    // accumulation, no anti-windup needed.
+    float sem_x = 0.0f;           // accumulated momentum X
+    float sem_y = 0.0f;           // accumulated momentum Y
+
+    // --- Jitter Classifier Adaptive Deadband (JCAD) state ---
+    // Online exponentially-weighted mean and variance of inter-frame detector
+    // displacement, used to compute a jitter score that widens a deadband when
+    // detections are noisy on a stationary target.
+    float jcad_ew_mean = 0.0f;    // exponentially weighted mean displacement
+    float jcad_ew_var = 0.0f;     // exponentially weighted variance
+
+    // --- Phase-Aware Gain Scheduling (PAGS) state ---
+    // Tracks sign-flip frequency per axis to detect oscillation and schedule
+    // gains accordingly (ACQUIRE / TRACK / OSCILLATE).
+    float pags_flip_rate_x = 0.0f; // EW sign-flip rate X
+    float pags_flip_rate_y = 0.0f; // EW sign-flip rate Y
+    int   pags_prev_sign_x = 0;    // previous error sign X (+1/-1, 0=unset)
+    int   pags_prev_sign_y = 0;    // previous error sign Y
+    float pags_gain_mult = 1.0f;   // current smoothed gain multiplier
 };
 
 // Nonlinear P controller configuration.
@@ -330,6 +353,55 @@ struct AimConfig {
     // shooting, 0 otherwise. Negative Y = reference above center.
     float shoot_offset_x = 0.0f;
     float shoot_offset_y = 0.0f;
+
+    // --- Signed-Error Momentum (SEM) ---
+    // Accumulates while error sign is consistent, instant kill on sign flip.
+    // Accelerates sustained approach; brakes immediately on overshoot. All
+    // defaults are OFF (sem_enabled = 0) for backward compatibility.
+    float sem_enabled = 0.0f;     // 0=off (default OFF)
+    float sem_rate = 0.02f;       // accumulation rate per frame
+    float sem_max = 3.0f;         // max accumulated momentum (px, model-space)
+    float sem_decay = 0.95f;      // per-frame exponential decay
+
+    // --- Confidence-Gated Authority (CGA) ---
+    // Modulates the ENTIRE control output by detection confidence through a
+    // nonlinear smoothstep gate. Low-confidence detections produce smaller moves,
+    // preventing wild corrections on noisy/ambiguous detections. A speed bypass
+    // ensures MOVING targets get full authority regardless of confidence (motion
+    // blur drops confidence to ~0.4-0.5, overlapping the outlier range, so a
+    // plain confidence weight would suppress real moving-target frames - see the
+    // removed conf-weight note in pd_controller.cuh).
+    float cga_enabled = 0.0f;         // 0=off
+    float cga_conf_low = 0.4f;        // confidence below this -> gate ~0
+    float cga_conf_high = 0.8f;       // confidence above this -> gate ~1
+    float cga_speed_threshold = 3.0f;  // velocity (model px/frame) above which
+                                       // the speed bypass dominates the gate
+
+    // --- Jitter Classifier Adaptive Deadband (JCAD) ---
+    // Online classifier that detects when detections are "jittery" (high variance,
+    // low mean displacement) and widens the deadband to prevent the controller
+    // from chasing detector noise on stationary targets. When real movement is
+    // detected (mean dominates variance), the deadband narrows to the base level.
+    float jcad_enabled = 0.0f;        // 0=off
+    float jcad_alpha = 0.15f;         // EW update rate for mean/variance
+    float jcad_base_db = 0.5f;        // minimum deadband radius (model px)
+    float jcad_jitter_db = 3.0f;      // additional deadband when jittery
+    float jcad_jitter_threshold = 2.0f; // J value at which jitter_db fully active
+
+    // --- Phase-Aware Gain Scheduling (PAGS) ---
+    // Detects which phase the controller is in by tracking the HISTORY of error
+    // sign changes, NOT just the error magnitude. ACQUIRE (large error, sign
+    // consistent): slightly boosted gains for fast reach. TRACK (small error,
+    // stable): baseline. OSCILLATE (sign alternating rapidly): reduced gains,
+    // increased damping. This is distinct from the nonlinear P gain (which only
+    // sees current error magnitude): PAGS detects and responds to the temporal
+    // PATTERN of sign reversals that characterize ringing.
+    float pags_enabled = 0.0f;            // 0=off
+    float pags_acquire_threshold = 15.0f; // error (model px) above = ACQUIRE
+    float pags_osc_threshold = 0.5f;      // sign-flip rate above = OSCILLATE
+    float pags_acquire_mult = 1.1f;       // gain multiplier in ACQUIRE
+    float pags_osc_mult = 0.6f;           // gain multiplier in OSCILLATE
+    float pags_alpha = 0.2f;              // EW rate for sign-flip tracking
 };
 
 struct MouseMovement {

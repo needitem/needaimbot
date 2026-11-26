@@ -331,6 +331,13 @@ __device__ __forceinline__ int emitMouseDelta(float movement, float* residual) {
     return emit;
 }
 
+// CUDA smoothstep: 0 at edge0, 1 at edge1, smooth hermite interpolation between.
+// Used by CGA for the confidence gate curve.
+__device__ __forceinline__ float gpaSmoothstep(float edge0, float edge1, float x) {
+    const float t = fminf(fmaxf((x - edge0) / (edge1 - edge0 + 1e-7f), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 // Full PD controller for a target detected THIS frame: One Euro pre-filter on
 // the measured center -> nonlinear P + D convergence -> max-step clamp ->
 // integer mouse delta. Mutates aim_state in place (filter/derivative/residual
@@ -342,6 +349,7 @@ __device__ __forceinline__ void computeAimMovement(
     const AimConfig& aim_config,
     AimState* aim_state,
     int target_class,
+    float detection_confidence,
     int& out_dx, int& out_dy) {
     // NOTE: confidence-weighted filtering was tried and removed. The idea was to
     // down-weight low-confidence detections (outliers) in the One Euro update. It
@@ -419,6 +427,26 @@ __device__ __forceinline__ void computeAimMovement(
         }
         target_center_x = aim_state->filt_x;
         target_center_y = aim_state->filt_y;
+    }
+
+    // --- JCAD: capture inter-frame displacement BEFORE the velocity estimator
+    // updates prev_raw. The displacement feeds the online jitter classifier
+    // that decides the adaptive deadband width further down.
+    if (aim_config.jcad_enabled != 0.0f) {
+        if (fresh_track) {
+            aim_state->jcad_ew_mean = 0.0f;
+            aim_state->jcad_ew_var = 0.0f;
+        } else {
+            const float jdx = raw_center_x - aim_state->prev_raw_x;
+            const float jdy = raw_center_y - aim_state->prev_raw_y;
+            const float jcad_disp = sqrtf(jdx * jdx + jdy * jdy);
+            const float ja = aim_config.jcad_alpha;
+            aim_state->jcad_ew_mean = ja * jcad_disp
+                                    + (1.0f - ja) * aim_state->jcad_ew_mean;
+            const float jdiff = jcad_disp - aim_state->jcad_ew_mean;
+            aim_state->jcad_ew_var = ja * jdiff * jdiff
+                                   + (1.0f - ja) * aim_state->jcad_ew_var;
+        }
     }
 
     // Ego-corrected target velocity. Feeds BOTH lead terms, so it must be updated
@@ -531,6 +559,23 @@ __device__ __forceinline__ void computeAimMovement(
         if (movement_scale_y != 0.0f) error_y -= aim_config.inflight_comp * inf_y / movement_scale_y;
     }
 
+    // --- JCAD: adaptive deadband. J = var / (mean^2 + eps): high when variance
+    // dominates mean (jitter on a stationary target), low when mean dominates
+    // (real movement). The deadband widens smoothly from base_db to
+    // base_db + jitter_db as J rises. Error inside the deadband is zeroed so
+    // the controller does not chase detector noise.
+    if (aim_config.jcad_enabled != 0.0f) {
+        const float mean_sq = aim_state->jcad_ew_mean * aim_state->jcad_ew_mean;
+        const float J = aim_state->jcad_ew_var / (mean_sq + 1e-6f);
+        const float sat_J = fminf(J / aim_config.jcad_jitter_threshold, 1.0f);
+        const float db = aim_config.jcad_base_db + aim_config.jcad_jitter_db * sat_J;
+        const float err_mag = sqrtf(error_x * error_x + error_y * error_y);
+        if (err_mag < db) {
+            error_x = 0.0f;
+            error_y = 0.0f;
+        }
+    }
+
     // Symmetric dead-time compensation: the in-flight subtraction above removed
     // OUR motion during the dead time; this extrapolates the TARGET forward over
     // the same dead time, which nothing did before. Shifting the SETPOINT (not
@@ -589,6 +634,87 @@ __device__ __forceinline__ void computeAimMovement(
                         aim_config.fine_track_boost, aim_config.fine_track_range)
          + aim_config.kd_y * aim_state->derr_y + ff_y) * movement_scale_y;
 
+    // --- SEM: Signed-Error Momentum. Accumulates momentum while the error sign
+    // is consistent on each axis; instant kill on sign flip (overshoot detected).
+    // Unlike an integral term: no windup, no sign-agnostic accumulation, no
+    // anti-windup needed. The SEM term naturally accelerates approach on sustained
+    // error and instantly brakes on overshoot.
+    if (aim_config.sem_enabled != 0.0f) {
+        // Reset on fresh acquire so a previous target's momentum cannot persist
+        if (fresh_track) {
+            aim_state->sem_x = 0.0f;
+            aim_state->sem_y = 0.0f;
+        }
+        // Decay existing momentum
+        aim_state->sem_x *= aim_config.sem_decay;
+        aim_state->sem_y *= aim_config.sem_decay;
+        // X axis: accumulate or kill
+        if (error_x * aim_state->sem_x < 0.0f) {
+            aim_state->sem_x = 0.0f;  // sign flip: overshoot detected
+        }
+        aim_state->sem_x += aim_config.sem_rate * error_x;
+        aim_state->sem_x = fminf(fmaxf(aim_state->sem_x, -aim_config.sem_max),
+                                 aim_config.sem_max);
+        // Y axis: accumulate or kill
+        if (error_y * aim_state->sem_y < 0.0f) {
+            aim_state->sem_y = 0.0f;
+        }
+        aim_state->sem_y += aim_config.sem_rate * error_y;
+        aim_state->sem_y = fminf(fmaxf(aim_state->sem_y, -aim_config.sem_max),
+                                 aim_config.sem_max);
+        // Add momentum to output movement
+        movement_x += aim_state->sem_x * movement_scale_x;
+        movement_y += aim_state->sem_y * movement_scale_y;
+    }
+
+    // --- PAGS: Phase-Aware Gain Scheduling. Detects which phase the controller
+    // is in by tracking the HISTORY of error sign changes (not just current error
+    // magnitude). Three phases: ACQUIRE (large error, sign consistent) -> slightly
+    // boosted gains for fast reach. TRACK (small error, stable) -> baseline.
+    // OSCILLATE (sign alternating rapidly) -> reduced gains to damp ringing.
+    // This is distinct from nonlinear P (error-proportional gain): PAGS detects
+    // the temporal PATTERN of sign reversals that characterize oscillation.
+    if (aim_config.pags_enabled != 0.0f) {
+        if (fresh_track) {
+            aim_state->pags_flip_rate_x = 0.0f;
+            aim_state->pags_flip_rate_y = 0.0f;
+            aim_state->pags_prev_sign_x = 0;
+            aim_state->pags_prev_sign_y = 0;
+            aim_state->pags_gain_mult = 1.0f;
+        }
+        // Track sign-flip frequency per axis
+        const int sign_x = (error_x > 0.0f) ? 1 : ((error_x < 0.0f) ? -1 : 0);
+        const int sign_y = (error_y > 0.0f) ? 1 : ((error_y < 0.0f) ? -1 : 0);
+        const float flip_x = (aim_state->pags_prev_sign_x != 0 && sign_x != 0 &&
+                              sign_x != aim_state->pags_prev_sign_x) ? 1.0f : 0.0f;
+        const float flip_y = (aim_state->pags_prev_sign_y != 0 && sign_y != 0 &&
+                              sign_y != aim_state->pags_prev_sign_y) ? 1.0f : 0.0f;
+        const float pa = aim_config.pags_alpha;
+        aim_state->pags_flip_rate_x = pa * flip_x
+                                    + (1.0f - pa) * aim_state->pags_flip_rate_x;
+        aim_state->pags_flip_rate_y = pa * flip_y
+                                    + (1.0f - pa) * aim_state->pags_flip_rate_y;
+        if (sign_x != 0) aim_state->pags_prev_sign_x = sign_x;
+        if (sign_y != 0) aim_state->pags_prev_sign_y = sign_y;
+        // Phase detection: use max flip rate across both axes
+        const float err_mag = sqrtf(error_x * error_x + error_y * error_y);
+        const float flip_rate = fmaxf(aim_state->pags_flip_rate_x,
+                                      aim_state->pags_flip_rate_y);
+        float target_mult;
+        if (err_mag > aim_config.pags_acquire_threshold) {
+            target_mult = aim_config.pags_acquire_mult;   // ACQUIRE
+        } else if (flip_rate > aim_config.pags_osc_threshold) {
+            target_mult = aim_config.pags_osc_mult;       // OSCILLATE
+        } else {
+            target_mult = 1.0f;                           // TRACK
+        }
+        // Smooth transition to avoid gain discontinuities
+        aim_state->pags_gain_mult = 0.3f * target_mult
+                                  + 0.7f * aim_state->pags_gain_mult;
+        movement_x *= aim_state->pags_gain_mult;
+        movement_y *= aim_state->pags_gain_mult;
+    }
+
     // Per-frame max-step clamp (output px). Bounds the slew so a large initial
     // error is crossed in several smooth steps instead of one delayed leap
     // that overshoots and rings - overshoot D cannot prevent reactively.
@@ -619,6 +745,25 @@ __device__ __forceinline__ void computeAimMovement(
     // controller reacting correctly. Measured closed-loop on an X-only target,
     // horizontal error moves 0.05% across y_scale 1.0 -> 0.
     clampMaxStep(movement_x, movement_y, aim_config.max_step);
+
+    // --- CGA: Confidence-Gated Authority. Modulates the whole output by
+    // detection confidence, with a speed bypass so MOVING targets get full
+    // authority regardless of confidence (motion blur drops conf to ~0.4-0.5,
+    // overlapping the ~0.38 outlier level - see the removed conf-weight note
+    // above). At rest (speed near 0), low confidence suppresses the output
+    // through a smoothstep gate; at speed the bypass saturates to ~1.
+    if (aim_config.cga_enabled != 0.0f) {
+        const float speed = sqrtf(aim_state->vel_x * aim_state->vel_x +
+                                  aim_state->vel_y * aim_state->vel_y);
+        const float speed_bypass = speed / (speed + aim_config.cga_speed_threshold
+                                            + 1e-7f);
+        const float conf_gate = gpaSmoothstep(aim_config.cga_conf_low,
+                                              aim_config.cga_conf_high,
+                                              detection_confidence);
+        const float gate = fmaxf(conf_gate, speed_bypass);
+        movement_x *= gate;
+        movement_y *= gate;
+    }
 
     // Output gate. The ring must record what the mouse ACTUALLY receives, so when
     // the host has told us this frame's move will not be sent (aim key up while
