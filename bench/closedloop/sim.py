@@ -82,22 +82,22 @@ class AimState:
 
 @dataclass
 class AimConfig:
-    kp_x: float = 0.991
-    kp_y: float = 0.389
-    p_softness_x: float = 7.39
-    p_softness_y: float = 20.0
-    kd_x: float = 0.035
-    kd_y: float = 0.025
+    kp_x: float = 0.712
+    kp_y: float = 0.394
+    p_softness_x: float = 2.08
+    p_softness_y: float = 9.42
+    kd_x: float = 0.004
+    kd_y: float = 0.006
     fine_track_boost: float = 1.3
     fine_track_range: float = 0.5
-    max_step: float = 14.55
-    deadtime_frames: float = 3.90
-    ff_gain: float = 2.08
+    max_step: float = 9.71
+    deadtime_frames: float = 3.97
+    ff_gain: float = 0.612
     ff_ego_lag: float = 2.85
-    predict_frames: float = 4.30
+    predict_frames: float = 5.78
     oneeuro_enabled: float = 1.0
-    oneeuro_min_cutoff: float = 0.030
-    oneeuro_beta: float = 0.050
+    oneeuro_min_cutoff: float = 0.039
+    oneeuro_beta: float = 0.009
     aim_output_enabled: float = 1.0
     shoot_offset_x: float = 0.0
     shoot_offset_y: float = 0.0
