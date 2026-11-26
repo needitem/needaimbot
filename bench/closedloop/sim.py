@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Closed-loop FPS aimbot simulation with ego-pollution, realistic noise,
-and the actual PD controller math from pd_controller.cuh.
+"""Closed-loop FPS aimbot simulation with comprehensive real-world effects.
 
 All default parameters match the production runtime (simple_config.json)
 so simulation results are directly comparable to real-system behaviour.
@@ -9,15 +8,23 @@ The simulation models the full chain:
   1. World-space target follows a trajectory
   2. FPS camera transforms world→screen (ego-pollution: mouse output shifts ALL screen coords)
   3. Detector produces noisy bounding box with confidence
-  4. Controller computes mouse delta (PD + One Euro + dead-time comp + adaptive kp + SEM/CGA/JCAD/PAGS)
-  5. Mouse delta feeds back into camera → next frame
+  4. Pipeline latency + UDP transport (variable per-frame dead-time)
+  5. Controller computes mouse delta (PD + One Euro + dead-time comp + adaptive kp + SEM/CGA/JCAD/PAGS)
+  6. Frame-rate adaptive gain scaling (rescaleAimConfigForRate)
+  7. Makcu mouse HW delay (1000Hz HID quantization + serial transport)
+  8. Mouse delta feeds back into camera → next frame
 
-Noise sources:
+Noise / real-world sources:
   - Detection jitter (Gaussian, calibrated from rig CSVs: σ≈1.75px at 160×160)
   - Confidence variation (Gaussian, mean≈0.72, σ≈0.12)
   - Missed detections (3% drop rate, up to 2 consecutive)
   - Class flips (head↔body, 1.5% per frame, 7.5px vertical offset at 160×160)
-  - Pipeline dead-time: 3 frames (ceil of 2.85 deadtime_frames)
+  - UDP packet loss (0.1% per fragment × 12 fragments/frame ≈ 1.2% frame loss)
+  - Pipeline latency jitter (lognormal, p50=2.7ms, p95=4.8ms)
+  - Frame timing jitter (95% normal σ=0.3ms, 5% stall spikes 8-15ms)
+  - Makcu HID delay (uniform 0.5-1.5ms quantised to 1ms intervals)
+  - IoU-based target tracking loss / re-acquisition
+  - Non-linear camera (slight high-speed deceleration)
 """
 
 import math
@@ -75,22 +82,22 @@ class AimState:
 
 @dataclass
 class AimConfig:
-    kp_x: float = 0.765
-    kp_y: float = 0.698
-    p_softness_x: float = 8.6
-    p_softness_y: float = 13.14
-    kd_x: float = 0.052
-    kd_y: float = 0.037
+    kp_x: float = 0.925
+    kp_y: float = 0.500
+    p_softness_x: float = 5.53
+    p_softness_y: float = 10.39
+    kd_x: float = 0.097
+    kd_y: float = 0.079
     fine_track_boost: float = 1.3
     fine_track_range: float = 0.5
-    max_step: float = 19.56
-    deadtime_frames: float = 2.85
-    ff_gain: float = 1.7
+    max_step: float = 15.71
+    deadtime_frames: float = 3.16
+    ff_gain: float = 2.26
     ff_ego_lag: float = 2.85
-    predict_frames: float = 3.18
+    predict_frames: float = 3.16
     oneeuro_enabled: float = 1.0
-    oneeuro_min_cutoff: float = 0.084
-    oneeuro_beta: float = 0.02
+    oneeuro_min_cutoff: float = 0.054
+    oneeuro_beta: float = 0.014
     aim_output_enabled: float = 1.0
     shoot_offset_x: float = 0.0
     shoot_offset_y: float = 0.0
@@ -126,12 +133,18 @@ K_PAGS_ACQUIRE_MULT = 1.1
 K_PAGS_OSC_MULT = 0.4
 K_PAGS_ALPHA = 0.2
 # Adaptive kp: error-magnitude-dependent gain scaling
-K_ADAPTIVE_KP_LARGE_THRESHOLD = 15.0
-K_ADAPTIVE_KP_SMALL_THRESHOLD = 4.0
-K_ADAPTIVE_KP_LARGE_MULT = 1.3
-K_ADAPTIVE_KP_SMALL_MULT = 0.7
+K_ADAPTIVE_KP_LARGE_THRESHOLD = 23.69
+K_ADAPTIVE_KP_SMALL_THRESHOLD = 2.52
+K_ADAPTIVE_KP_LARGE_MULT = 1.05
+K_ADAPTIVE_KP_SMALL_MULT = 0.68
 
 K_DERIV_ALPHA = (2.0 * math.pi) / (2.0 * math.pi + 1.0)
+
+# Pipeline constants (from simple_config.json / simple_main.cpp)
+K_INFLIGHT_DEADTIME_MS = 10.2
+K_AIM_TUNED_FPS = 143.0
+K_RATE_SCALE_MIN = 0.5
+K_RATE_SCALE_MAX = 2.0
 
 # ---------------------------------------------------------------------------
 # Controller math (exact port from pd_controller.cuh)
@@ -231,16 +244,22 @@ def emit_mouse_delta(movement: float, residual: float):
     if movement * carried < 0.0:
         carried = 0.0
     value = movement + carried
-    emit = int(value)  # truncate toward zero
-    if value >= 0:
-        emit = int(math.floor(value)) if value == int(value) else int(value)
-        emit = int(value) if value >= 0 else int(value)
     emit = int(math.trunc(value))
     if emit > 127:
         return 127, min(256.0, value - 127.0)
     if emit < -127:
         return -127, max(-256.0, value + 127.0)
     return emit, value - float(emit)
+
+def rescale_aim_config_for_rate(cfg: AimConfig, r: float):
+    """Mirrors rescaleAimConfigForRate() from config.hpp.
+    r = actual_period / tuned_period, clamped to [0.5, 2.0]."""
+    cfg.kp_x *= r
+    cfg.kp_y *= r
+    cfg.max_step *= r
+    cfg.oneeuro_min_cutoff *= r
+    cfg.predict_frames /= r
+    cfg.ff_gain /= r
 
 def compute_aim_movement(raw_cx, raw_cy, screen_cx, screen_cy,
                          scale_x, scale_y, cfg: AimConfig,
@@ -499,23 +518,199 @@ class NoiseModel:
         return current_class, 0.0
 
 # ---------------------------------------------------------------------------
-# FPS Camera model (ego-pollution)
+# Pipeline latency model (from simple_main.cpp measured E2E p50/p95)
+# ---------------------------------------------------------------------------
+class PipelineModel:
+    """Models variable inference + transport latency per frame.
+
+    Real system: E2E p50=2.7ms, p95=4.8ms (lognormal).
+    Converts to variable deadtime_frames per frame using the same formula
+    as simple_main.cpp: dtFrames = (inflight_deadtime_ms + 0.5*periodMs) / periodMs
+    """
+    def __init__(self, rng: random.Random,
+                 inflight_deadtime_ms: float = K_INFLIGHT_DEADTIME_MS,
+                 tuned_fps: float = K_AIM_TUNED_FPS):
+        self.rng = rng
+        self.inflight_deadtime_ms = inflight_deadtime_ms
+        self.tuned_fps = tuned_fps
+        self.tuned_period_ms = 1000.0 / tuned_fps
+        # Lognormal parameters fit to p50=2.7ms, p95=4.8ms
+        # p50 = exp(mu) → mu = ln(2.7)
+        # p95 = exp(mu + 1.645*sigma) → sigma = (ln(4.8) - ln(2.7)) / 1.645
+        self.mu = math.log(2.7)
+        self.sigma = (math.log(4.8) - math.log(2.7)) / 1.645
+        # Frame period EMA (like the real code's slow estimator)
+        self.frame_period_ema_ms = self.tuned_period_ms
+
+    def sample_frame_period_ms(self) -> float:
+        """Sample a frame interval with realistic jitter and occasional stalls."""
+        if self.rng.random() < 0.05:
+            # 5% chance of stall (GC, OS scheduler, GPU contention)
+            period = self.rng.uniform(8.0, 15.0)
+        else:
+            period = self.rng.gauss(self.tuned_period_ms, 0.3)
+            period = max(period, 2.0)  # floor
+        # Update EMA (alpha=0.002 like real code, but faster startup)
+        a = 0.002
+        self.frame_period_ema_ms = (1.0 - a) * self.frame_period_ema_ms + a * period
+        return period
+
+    def sample_transport_latency_ms(self) -> float:
+        """Sample E2E transport latency (lognormal, p50=2.7ms, p95=4.8ms)."""
+        return self.rng.lognormvariate(self.mu, self.sigma)
+
+    def compute_deadtime_frames(self, period_ms: float) -> float:
+        """Compute per-frame adaptive dead-time (mirrors simple_main.cpp line 818)."""
+        if period_ms <= 0:
+            return 0.0
+        dt = (self.inflight_deadtime_ms + 0.5 * period_ms) / period_ms
+        return min(max(dt, 0.0), float(INFLIGHT_MAX))
+
+    def compute_rate_scale(self, period_ms: float) -> float:
+        """Rate scaling factor r for gain normalisation."""
+        if self.tuned_period_ms <= 0:
+            return 1.0
+        r = period_ms / self.tuned_period_ms
+        r = min(max(r, K_RATE_SCALE_MIN), K_RATE_SCALE_MAX)
+        # Quantise to 1% like real code
+        r = round(r * 100.0) / 100.0
+        return r
+
+# ---------------------------------------------------------------------------
+# Network model (UDP packet loss)
+# ---------------------------------------------------------------------------
+class NetworkModel:
+    """Models UDP fragmentation loss.
+
+    GamePC sends 12 IP fragments per frame (from stats: 12.0 pkts/frame).
+    Any single lost fragment = entire frame lost.
+    """
+    def __init__(self, rng: random.Random,
+                 packet_loss_rate: float = 0.001,
+                 packets_per_frame: int = 12):
+        self.rng = rng
+        self.frame_loss_prob = 1.0 - (1.0 - packet_loss_rate) ** packets_per_frame
+
+    def is_frame_lost(self) -> bool:
+        return self.rng.random() < self.frame_loss_prob
+
+# ---------------------------------------------------------------------------
+# Mouse hardware model (Makcu serial + HID)
+# ---------------------------------------------------------------------------
+class MouseHardwareModel:
+    """Models Makcu mouse transport delay.
+
+    Serial baud 4Mbps, USB HID 1000Hz polling → ~1ms quantisation.
+    Total delay: uniform 0.5-1.5ms (serial TX + HID report alignment).
+    """
+    def __init__(self, rng: random.Random):
+        self.rng = rng
+        self.pending_dx = 0
+        self.pending_dy = 0
+        self.pending_time_ms = 0.0
+        self.hid_interval_ms = 1.0  # 1000Hz polling
+
+    def submit_move(self, dx: int, dy: int, current_time_ms: float):
+        """Queue a mouse move with HW delay."""
+        delay = self.rng.uniform(0.5, 1.5)
+        self.pending_dx = dx
+        self.pending_dy = dy
+        self.pending_time_ms = current_time_ms + delay
+
+    def get_move(self, current_time_ms: float) -> Tuple[int, int]:
+        """Get the mouse move if the HID report time has arrived."""
+        if self.pending_time_ms > 0 and current_time_ms >= self.pending_time_ms:
+            dx, dy = self.pending_dx, self.pending_dy
+            self.pending_dx = 0
+            self.pending_dy = 0
+            self.pending_time_ms = 0.0
+            return dx, dy
+        return 0, 0
+
+# ---------------------------------------------------------------------------
+# Target tracking model (IoU-based stickiness)
+# ---------------------------------------------------------------------------
+class TargetTrackingModel:
+    """Models IoU-based target tracking with stickiness and re-acquisition.
+
+    Real system: iou_stickiness_threshold=0.3, track_persistence_frames=3.
+    When target moves fast, tracking can momentarily lose the target, causing
+    a fresh_track reset that disrupts the velocity estimator.
+    """
+    def __init__(self, rng: random.Random,
+                 iou_threshold: float = 0.3,
+                 persistence_frames: int = 3):
+        self.rng = rng
+        self.iou_threshold = iou_threshold
+        self.persistence_frames = persistence_frames
+        self.prev_det_x = 0.0
+        self.prev_det_y = 0.0
+        self.prev_det_w = 20.0  # typical bbox width in model px
+        self.frames_without_match = 0
+        self.has_prev = False
+
+    def update(self, det_x: float, det_y: float, missed: bool) -> bool:
+        """Returns True if this is a tracking loss (fresh_track reset).
+
+        Estimates IoU based on detection displacement vs bbox size. Large
+        displacement = low IoU = potential track break.
+        """
+        if missed:
+            self.frames_without_match += 1
+            if self.frames_without_match > self.persistence_frames:
+                self.has_prev = False
+                return True  # track lost
+            return False
+
+        if not self.has_prev:
+            self.prev_det_x = det_x
+            self.prev_det_y = det_y
+            self.has_prev = True
+            self.frames_without_match = 0
+            return True  # first detection = fresh track
+
+        # Estimate IoU from displacement: IoU ≈ max(0, 1 - displacement/bbox_size)
+        dx = abs(det_x - self.prev_det_x)
+        dy = abs(det_y - self.prev_det_y)
+        displacement = math.sqrt(dx*dx + dy*dy)
+        estimated_iou = max(0.0, 1.0 - displacement / self.prev_det_w)
+
+        self.prev_det_x = det_x
+        self.prev_det_y = det_y
+        self.frames_without_match = 0
+
+        if estimated_iou < self.iou_threshold:
+            return True  # IoU too low = track break
+        return False
+
+# ---------------------------------------------------------------------------
+# FPS Camera model (ego-pollution + non-linear sensitivity)
 # ---------------------------------------------------------------------------
 @dataclass
 class FPSCamera:
-    """Models FPS game camera: mouse input rotates view, shifting ALL screen coords."""
-    yaw: float = 0.0    # horizontal angle (degrees)
-    pitch: float = 0.0  # vertical angle (degrees)
+    """Models FPS game camera with ego-pollution and speed-dependent sensitivity.
+
+    At high mouse speeds (>50px/frame), sensitivity drops slightly (0.95x)
+    to model common game engine deceleration curves.
+    """
+    yaw: float = 0.0
+    pitch: float = 0.0
     sensitivity: float = 0.022  # degrees per mouse pixel (typical FPS @ 800 DPI)
     model_size: int = 160
+    high_speed_threshold: float = 50.0  # px/frame
+    high_speed_factor: float = 0.95
 
     def apply_mouse(self, dx: int, dy: int):
-        self.yaw += dx * self.sensitivity
-        self.pitch += dy * self.sensitivity
+        speed = math.sqrt(dx*dx + dy*dy)
+        sens = self.sensitivity
+        if speed > self.high_speed_threshold:
+            blend = min((speed - self.high_speed_threshold) / self.high_speed_threshold, 1.0)
+            sens *= (1.0 - blend) + blend * self.high_speed_factor
+        self.yaw += dx * sens
+        self.pitch += dy * sens
         self.pitch = max(-89, min(89, self.pitch))
 
     def world_to_screen(self, world_x: float, world_y: float):
-        """Convert world-space angular offset to model-space screen coords."""
         screen_x = (world_x - self.yaw) / self.sensitivity + self.model_size / 2
         screen_y = (world_y - self.pitch) / self.sensitivity + self.model_size / 2
         return screen_x, screen_y
@@ -527,7 +722,7 @@ def trajectory_stationary(t, **kw):
     return 0.0, 0.0
 
 def trajectory_slow_strafe(t, speed=1.5, **kw):
-    return speed * t * 0.022, 0.0  # convert model px/frame to degrees
+    return speed * t * 0.022, 0.0
 
 def trajectory_fast_strafe(t, speed=6.0, **kw):
     return speed * t * 0.022, 0.0
@@ -556,18 +751,11 @@ TRAJECTORIES = {
 # Algorithm configurations
 # ---------------------------------------------------------------------------
 def config_baseline():
-    """PD + One Euro + dead-time comp (no novel algorithms)."""
+    """PD + One Euro + dead-time comp + lead (no novel algorithms)."""
     return AimConfig()
 
-def config_sem_pags():
-    """Baseline + SEM + PAGS (best-value from synthetic benchmark)."""
-    c = config_baseline()
-    c.sem_enabled = 1.0
-    c.pags_enabled = 1.0
-    return c
-
-def config_all_novel():
-    """Baseline + all 4 novel algorithms."""
+def config_production():
+    """Full production config: all 4 novel algorithms enabled."""
     c = config_baseline()
     c.sem_enabled = 1.0
     c.cga_enabled = 1.0
@@ -575,16 +763,25 @@ def config_all_novel():
     c.pags_enabled = 1.0
     return c
 
-def config_with_lead():
-    """Baseline + lead terms (ff_gain + predict_frames) - uses defaults."""
+def config_sem_pags():
+    """Baseline + SEM + PAGS only."""
     c = config_baseline()
+    c.sem_enabled = 1.0
+    c.pags_enabled = 1.0
+    return c
+
+def config_no_lead():
+    """Baseline with lead terms disabled (shows lead contribution)."""
+    c = config_baseline()
+    c.ff_gain = 0.0
+    c.predict_frames = 0.0
     return c
 
 CONFIGS = {
     "baseline":       config_baseline,
+    "production":     config_production,
     "sem_pags":       config_sem_pags,
-    "all_novel":      config_all_novel,
-    "with_lead":      config_with_lead,
+    "no_lead":        config_no_lead,
 }
 
 # ---------------------------------------------------------------------------
@@ -601,6 +798,8 @@ class SimResult:
     sign_flips_y: int = 0
     misses: int = 0
     total_movement: float = 0.0
+    udp_losses: int = 0
+    track_breaks: int = 0
 
     @property
     def mae(self):
@@ -635,11 +834,15 @@ class SimResult:
         return self.sign_flips_x + self.sign_flips_y
 
 def run_sim(traj_name: str, config_name: str, seed: int = 42,
-            n_frames: int = 300, deadtime_delay: int = 3) -> SimResult:
-    cfg = CONFIGS[config_name]()
+            n_frames: int = 300) -> SimResult:
+    base_cfg = CONFIGS[config_name]()
     state = AimState()
     camera = FPSCamera()
+    rng = random.Random(seed)
     noise = NoiseModel(seed=seed)
+    pipeline = PipelineModel(rng)
+    network = NetworkModel(rng)
+    tracker = TargetTrackingModel(rng)
     traj_fn = TRAJECTORIES[traj_name]
     result = SimResult(traj_name, config_name, seed, n_frames)
 
@@ -648,18 +851,18 @@ def run_sim(traj_name: str, config_name: str, seed: int = 42,
     screen_cy = model_size / 2.0
     scale_x = 1.0
     scale_y = 1.0
-    target_class = 0  # body
+    target_class = 0
     prev_sign_x = 0
     prev_sign_y = 0
 
-    # Dead-time pipeline: controller sees detection from `deadtime_delay` frames ago
-    detection_buffer = []
-
     for frame in range(n_frames):
+        # --- Frame timing (variable period with jitter & stalls) ---
+        frame_period_ms = pipeline.sample_frame_period_ms()
+
         # 1. Target moves in world space
         world_x, world_y = traj_fn(frame)
 
-        # 2. Project target to screen via camera (ego-pollution here!)
+        # 2. Project target to screen via camera (ego-pollution)
         det_x, det_y = camera.world_to_screen(world_x, world_y)
 
         # 3. Add detector noise
@@ -672,30 +875,37 @@ def run_sim(traj_name: str, config_name: str, seed: int = 42,
         target_class, flip_offset = noise.class_flip(target_class)
         det_y += flip_offset
 
-        # Missed detection
+        # Missed detection (detector miss OR UDP frame loss)
         missed = noise.is_missed()
+        if not missed and network.is_frame_lost():
+            missed = True
+            result.udp_losses += 1
 
-        # Buffer detection for dead-time
-        detection_buffer.append((det_x, det_y, conf, target_class, missed))
+        # IoU-based tracking: check if this detection breaks the track
+        track_break = tracker.update(det_x, det_y, missed)
+        if track_break and state.has_track:
+            result.track_breaks += 1
+            state.has_track = 0
 
-        # 4. Controller processes delayed detection
-        if len(detection_buffer) > deadtime_delay:
-            d = detection_buffer[-1 - deadtime_delay]
-            d_x, d_y, d_conf, d_class, d_missed = d
-
-            if d_missed:
-                result.misses += 1
-                state.frames_since_seen += 1
-                push_inflight(state, 0.0, 0.0)
-                dx, dy = 0, 0
-            else:
-                state.frames_since_seen = 0
-                dx, dy = compute_aim_movement(
-                    d_x, d_y, screen_cx, screen_cy,
-                    scale_x, scale_y, cfg, state,
-                    d_class, d_conf)
+        # 4. Controller (detection processed same frame; deadtime_frames
+        #    already accounts for the full capture→mouse pipeline delay)
+        dx, dy = 0, 0
+        if missed:
+            result.misses += 1
+            state.frames_since_seen += 1
+            push_inflight(state, 0.0, 0.0)
         else:
-            dx, dy = 0, 0
+            state.frames_since_seen = 0
+            cfg = dataclasses.replace(base_cfg)
+            rate_scale = pipeline.compute_rate_scale(frame_period_ms)
+            if rate_scale != 1.0:
+                rescale_aim_config_for_rate(cfg, rate_scale)
+            cfg.deadtime_frames = pipeline.compute_deadtime_frames(frame_period_ms)
+
+            dx, dy = compute_aim_movement(
+                det_x, det_y, screen_cx, screen_cy,
+                scale_x, scale_y, cfg, state,
+                target_class, conf)
 
         # 5. Apply mouse delta to camera (ego-pollution feedback loop)
         camera.apply_mouse(dx, dy)
@@ -726,14 +936,15 @@ def main():
     n_frames = 300
     all_results = {}
 
-    print(f"Closed-Loop FPS Aimbot Simulation")
-    print(f"{'='*72}")
-    print(f"Frames: {n_frames} | Seeds: {len(seeds)} | Dead-time: 3 frames (2.85)")
+    print(f"Closed-Loop FPS Aimbot Simulation (Full Real-World Model)")
+    print(f"{'='*80}")
+    print(f"Frames: {n_frames} | Seeds: {len(seeds)} | Adaptive dead-time + rate scaling")
     print(f"Noise: det_σ=1.75px @160×160, miss=3%, class_flip=1.5%")
-    print(f"Camera: 0.022°/px sensitivity, ego-pollution ON, adaptive kp ON")
+    print(f"Pipeline: latency p50=2.7ms p95=4.8ms, UDP loss ~1.2%/frame")
+    print(f"HW: Makcu 1kHz HID, non-linear camera, IoU tracking")
     print()
 
-    header = f"{'Trajectory':<16} {'Config':<14} {'MAE':>7} {'RMS':>7} {'P95':>7} {'Settle':>7} {'Osc':>5} {'Miss':>5}"
+    header = f"{'Trajectory':<16} {'Config':<14} {'MAE':>7} {'RMS':>7} {'P95':>7} {'Settle':>7} {'Osc':>5} {'Miss':>5} {'UDP':>4} {'TBrk':>4}"
     print(header)
     print("-" * len(header))
 
@@ -750,6 +961,8 @@ def main():
             avg_settle = sum(r.settle_frame for r in seed_results) / len(seed_results)
             avg_osc = sum(r.oscillation_count for r in seed_results) / len(seed_results)
             avg_miss = sum(r.misses for r in seed_results) / len(seed_results)
+            avg_udp = sum(r.udp_losses for r in seed_results) / len(seed_results)
+            avg_tbrk = sum(r.track_breaks for r in seed_results) / len(seed_results)
 
             key = f"{traj_name}|{cfg_name}"
             all_results[key] = {
@@ -761,16 +974,19 @@ def main():
                 "settle": round(avg_settle, 1),
                 "oscillation": round(avg_osc, 1),
                 "misses": round(avg_miss, 1),
+                "udp_losses": round(avg_udp, 1),
+                "track_breaks": round(avg_tbrk, 1),
             }
 
             print(f"{traj_name:<16} {cfg_name:<14} {avg_mae:7.2f} {avg_rms:7.2f} "
-                  f"{avg_p95:7.2f} {avg_settle:7.1f} {avg_osc:5.1f} {avg_miss:5.1f}")
+                  f"{avg_p95:7.2f} {avg_settle:7.1f} {avg_osc:5.1f} {avg_miss:5.1f} "
+                  f"{avg_udp:4.1f} {avg_tbrk:4.1f}")
         print()
 
     # Summary comparison
-    print(f"\n{'='*72}")
+    print(f"\n{'='*80}")
     print("RELATIVE PERFORMANCE vs BASELINE (% change, negative = better)")
-    print(f"{'='*72}")
+    print(f"{'='*80}")
     header2 = f"{'Trajectory':<16} {'Config':<14} {'ΔMAE':>8} {'ΔRMS':>8} {'ΔP95':>8} {'ΔSettle':>8} {'ΔOsc':>8}"
     print(header2)
     print("-" * len(header2))
