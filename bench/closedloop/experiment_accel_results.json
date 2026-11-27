@@ -1,0 +1,76 @@
+{
+  "approach": "acceleration_feedforward",
+  "baseline_avg_mae": 1.7804,
+  "best_mae": 1.7184,
+  "improvement_pct": -3.48,
+  "best_params": {
+    "kp_x": 0.9544,
+    "kp_y": 0.444,
+    "p_softness_x": 5.5932,
+    "p_softness_y": 18.8381,
+    "kd_x": 0.0223,
+    "kd_y": 0.0073,
+    "ff_gain": 0.4704,
+    "predict_frames": 4.2402,
+    "deadtime_frames": 3.7881,
+    "oneeuro_min_cutoff": 0.0308,
+    "oneeuro_beta": 0.0143,
+    "max_step": 9.6682,
+    "akp_large_thresh": 27.2645,
+    "akp_small_thresh": 1.8429,
+    "akp_large_mult": 1.1051,
+    "akp_small_mult": 0.978,
+    "ff_v_ema": 0.0862,
+    "lead_vgate": 2.3978,
+    "ff_accel_gain": 1.0157,
+    "accel_smooth": 0.2204
+  },
+  "per_trajectory": {
+    "stationary": {
+      "mae": 0.3395,
+      "baseline_mae": 0.3738,
+      "improvement_pct": -9.18,
+      "status": "OK"
+    },
+    "slow_strafe": {
+      "mae": 2.1774,
+      "baseline_mae": 2.523,
+      "improvement_pct": -13.7,
+      "status": "OK"
+    },
+    "fast_strafe": {
+      "mae": 3.117,
+      "baseline_mae": 3.1323,
+      "improvement_pct": -0.49,
+      "status": "OK"
+    },
+    "sine_wave": {
+      "mae": 1.422,
+      "baseline_mae": 1.3846,
+      "improvement_pct": 2.7,
+      "status": "REGRESS"
+    },
+    "diagonal": {
+      "mae": 2.531,
+      "baseline_mae": 2.5343,
+      "improvement_pct": -0.13,
+      "status": "OK"
+    },
+    "step_response": {
+      "mae": 0.7234,
+      "baseline_mae": 0.7341,
+      "improvement_pct": -1.46,
+      "status": "OK"
+    }
+  },
+  "generations_used": 100,
+  "wall_clock_seconds": 965.7,
+  "config": {
+    "popsize": 16,
+    "max_gens": 100,
+    "stagnation_limit": 50,
+    "n_seeds": 7,
+    "n_frames": 300,
+    "algo": "SEM+JCAD+PAGS"
+  }
+}
